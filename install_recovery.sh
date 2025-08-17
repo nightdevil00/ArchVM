@@ -109,22 +109,23 @@ else
     sgdisk -n 4:0:0      -t 4:8302 $DISK   # HOME
 
     echo "Formatting EFI partition..."
-    mkfs.fat -F32 $EFI_PART
+    mkfs.fat -F32 "$EFI_PART"
 
     echo "Formatting root partition..."
-    mkfs.$FILESYSTEM $ROOT_PART
+    mkfs.$FILESYSTEM "$ROOT_PART"
 
     echo "Formatting home partition..."
-    mkfs.$FILESYSTEM $HOME_PART
+    mkfs.$FILESYSTEM "$HOME_PART"
 
     # Mount partitions
-    mount $ROOT_PART /mnt
+    mount "$ROOT_PART" /mnt
     mkdir -p /mnt/boot/efi
-    mount $EFI_PART /mnt/boot/efi
+    mount "$EFI_PART" /mnt/boot/efi
+    # Mount recovery partition read-only, do NOT download ISO
     mkdir -p /mnt/recovery
-    mount -o ro $RECOVERY_PART /mnt/recovery
+    mount -o ro "$RECOVERY_PART" /mnt/recovery
     mkdir -p /mnt/home
-    mount $HOME_PART /mnt/home
+    mount "$HOME_PART" /mnt/home
 fi
 
 require_cmds reflector python curl
@@ -144,6 +145,7 @@ else
     else
         echo "Recovery ISO already present: /mnt/recovery/archlinux.iso"
     fi
+    # Don't modify or download ISO in reinstall mode
 fi
 
 # ---------------- Desktop Environment ----------------
