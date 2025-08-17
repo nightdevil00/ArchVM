@@ -214,8 +214,9 @@ sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
 pacman -Syu --noconfirm
 
 # User setup
-#echo root:$PASSWORD | chpasswd
-useradd -m -G wheel -s /bin/bash $USERNAME
+echo root:$PASSWORD | chpasswd
+echo "Creating user: $USERNAME"
+useradd -m -G wheel -s /bin/bash "$USERNAME"
 echo $USERNAME:$PASSWORD | chpasswd
 sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers
 
