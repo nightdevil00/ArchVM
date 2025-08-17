@@ -57,8 +57,7 @@ fi
 
 echo "Starting Arch Linux installation on $DISK..."
 
-# === Detect recovery partition for reinstall mode ===
-if lsblk -no NAME,LABEL "$RECOVERY_PART" 2>/dev/null | grep -q "RECOVERY"; then
+if blkid -o value -s LABEL "$RECOVERY_PART" | grep -iq "RECOVERY"; then
   echo ">>> Recovery partition detected. Entering REINSTALL MODE..."
   MODE="reinstall"
 else
