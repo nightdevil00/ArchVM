@@ -213,10 +213,12 @@ sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
 pacman -Syu --noconfirm
 
 # User setup
-echo root:$PASSWORD | chpasswd
+echo "Setting root password to: $PASSWORD"
+echo "root:$PASSWORD" | chpasswd
 echo "Creating user: $USERNAME"
 useradd -m -G wheel -s /bin/bash "$USERNAME"
-echo $USERNAME:$PASSWORD | chpasswd
+echo "Creating user: $USERNAME with password: $PASSWORD"
+echo "$USERNAME:$PASSWORD" | chpasswd
 sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers
 
 # Enable services
