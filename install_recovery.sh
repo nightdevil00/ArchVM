@@ -208,13 +208,13 @@ echo "LANG=$LOCALE" > /etc/locale.conf
 # Pacman optimization
 sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 10/' /etc/pacman.conf
 sed -i 's/^#Color/Color/' /etc/pacman.conf
-grep -q "ILoveCandy" /etc/pacman.conf || echo "ILoveCandy" >> /etc/pacman.conf
+#grep -q "ILoveCandy" /etc/pacman.conf || echo "ILoveCandy" >> /etc/pacman.conf
 sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
 sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
 pacman -Syu --noconfirm
 
 # User setup
-echo root:$PASSWORD | chpasswd
+#echo root:$PASSWORD | chpasswd
 useradd -m -G wheel -s /bin/bash $USERNAME
 echo $USERNAME:$PASSWORD | chpasswd
 sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers
