@@ -43,6 +43,9 @@ require dialog parted lsblk pacstrap genfstab arch-chroot sed awk grep cut sort 
 systemctl -q is-active systemd-timesyncd || true
 info "Enabling NTP..."
 timedatectl set-ntp true || true
+systemctl enable systemd-timesyncd
+systemctl start systemd-timesyncd
+timedatectl set-ntp true
 
 #-------------------------------
 # Dialog wrappers
