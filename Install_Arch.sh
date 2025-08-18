@@ -81,7 +81,7 @@ for line in "${DISKS[@]}"; do
   dev=${line%%|*}
   desc=${line#*|}
   MENU_ITEMS+=("$dev" "$desc")
-fi
+done
 
 DISK=$(d_menu "Select install disk" 20 78 12 "${MENU_ITEMS[@]}") || exit 1
 
