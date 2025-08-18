@@ -42,6 +42,7 @@ require dialog parted lsblk pacstrap genfstab arch-chroot sed awk grep cut sort 
 # Ensure NTP
 info "Enabling and starting systemd-timesyncd..."
 systemctl enable systemd-timesyncd
+sleep 2
 systemctl start systemd-timesyncd
 
 # Show current NTP status
