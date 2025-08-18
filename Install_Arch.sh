@@ -40,11 +40,14 @@ require dialog parted lsblk pacstrap genfstab arch-chroot sed awk grep cut sort 
 [[ $EUID -eq 0 ]] || err "Run as root"
 
 # Ensure NTP
-systemctl -q is-active systemd-timesyncd || true
-info "Enabling NTP..."
-timedatectl set-ntp true || true
+info "Enabling and starting systemd-timesyncd..."
 systemctl enable systemd-timesyncd
 systemctl start systemd-timesyncd
+
+# Show current NTP status
+timedatectl show
+
+# Enable NTP sync
 timedatectl set-ntp true
 
 #-------------------------------
