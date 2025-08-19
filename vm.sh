@@ -227,7 +227,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
-arch-chroot /mnt /bin/bash -e <<'CHROOT'
+arch-chroot /mnt /bin/bash -e <<CHROOT
 set -e
 
 # Variables passed via environment
