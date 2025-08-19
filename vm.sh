@@ -288,58 +288,36 @@ arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 info "Installation complete!"
 
-#-----------------------------------------
-# After-install tasks (AUR & custom programs)
-#-----------------------------------------
-info "Running after-install tasks inside chroot..."
-
 arch-chroot /mnt /bin/bash -e <<AFTER
 set -euo pipefail
 
-# Detect the first non-root user in the system
-USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
-USERHOME="/home/$USERNAME"
+USERNAME=\$(awk -F: '(\$3>=1000)&&(\$1!="nobody"){print \$1; exit}' /etc/passwd)
+USERHOME="/home/\$USERNAME"
 
-echo "[INFO] Running after-install tasks for user: $USERNAME"
+echo "[INFO] Running after-install tasks for user: \$USERNAME"
+mkdir -p "\$USERHOME"
+chown -R "\$USERNAME:\$USERNAME" "\$USERHOME"
 
-# Ensure user's home exists and is owned correctly
-mkdir -p "$USERHOME"
-chown -R "$USERNAME:$USERNAME" "$USERHOME"
+cd "\$USERHOME"
 
-# Ensure networking
-systemctl enable --now NetworkManager || true
-
-# Update system and install required packages
-pacman -Syu --noconfirm
-pacman -S --needed --noconfirm base-devel git
-
-# Switch to user home
-cd "$USERHOME"
-
-# ------------------------
-# Install yay from AUR
-# ------------------------
+# Install yay
 if [[ ! -d yay-bin ]]; then
-    sudo -u "$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
+    sudo -u "\$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
 fi
 cd yay-bin
-sudo -u "$USERNAME" makepkg -si --noconfirm
+sudo -u "\$USERNAME" makepkg -si --noconfirm
 cd ..
 
-# ------------------------
-# Install programs via yay
-# ------------------------
-sudo -u "$USERNAME" yay -S --noconfirm google-chrome
+# Install google-chrome
+sudo -u "\$USERNAME" yay -S --noconfirm google-chrome
 
-# ------------------------
-# Selection for custom programs
-# ------------------------
+# Interactive selection **inside chroot**
 echo "Choose a program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
 echo "2) Omarchy"
 read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
 
-case "$PROG_CHOICE" in
+case "\$PROG_CHOICE" in
     1)
         REPO="https://github.com/JaKooLit/Arch-Hyprland"
         ;;
@@ -352,14 +330,14 @@ case "$PROG_CHOICE" in
         ;;
 esac
 
-if [[ -n "$REPO" ]]; then
-    DIR=$(basename "$REPO" .git)
-    if [[ ! -d "$DIR" ]]; then
-        sudo -u "$USERNAME" git clone "$REPO"
+if [[ -n "\$REPO" ]]; then
+    DIR=\$(basename "\$REPO" .git)
+    if [[ ! -d "\$DIR" ]]; then
+        sudo -u "\$USERNAME" git clone "\$REPO"
     fi
-    cd "$DIR"
+    cd "\$DIR"
     if [[ -f install.sh ]]; then
-        sudo -u "$USERNAME" bash install.sh
+        sudo -u "\$USERNAME" bash install.sh
     fi
 fi
 
