@@ -79,15 +79,15 @@ fi
 #-----------------------------------------
 # User / Host / Locale / Time
 #-----------------------------------------
-read -rp "Hostname [archbox]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-archbox}
+read -rp "Hostname [arch]: " HOSTNAME
+HOSTNAME=${HOSTNAME:-arch}
 
-read -rp "Username [arch]: " USERNAME
-USERNAME=${USERNAME:-arch}
+read -rp "Username [archuser]: " USERNAME
+USERNAME=${USERNAME:-archuser}
 
-read -rsp "User password [arch]: " USERPASS
+read -rsp "User password [archuser]: " USERPASS
 echo
-USERPASS=${USERPASS:-arch}
+USERPASS=${USERPASS:-archuser}
 
 read -rsp "Root password [root]: " ROOTPASS
 echo
@@ -109,7 +109,7 @@ esac
 read -rp "Timezone [Europe/Bucharest]: " TZONE
 TZONE=${TZONE:-Europe/Bucharest}
 
-# Locales to generate
+# Default locale
 LOCALES=(en_US.UTF-8)
 echo "Default locale: ${LOCALES[0]}"
 
@@ -224,39 +224,36 @@ info "Installing base system..."
 pacstrap -K /mnt "${ALL_PKGS[@]}"
 genfstab -U /mnt >> /mnt/etc/fstab
 
-
-LOCALES_STR="${LOCALES[*]}"
-MICROCODE_STR="${MICROCODE[*]}"
-
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
-arch-chroot /mnt /bin/bash -e <<CHROOT
+arch-chroot /mnt /bin/bash -e <<'CHROOT'
 set -e
 
-# Variables passed via environment
-HOSTNAME="$HOSTNAME"
-USERNAME="$USERNAME"
-USERPASS="$USERPASS"
-ROOTPASS="$ROOTPASS"
-SUDO_MODE="$SUDO_MODE"
-FS="$FS"
-TZONE="$TZONE"
-LOCALES=($LOCALES_STR)
-MICROCODE=($MICROCODE_STR)
-P1="$P1"
-P2="$P2"
-P3="$P3"
+# Default variables passed from outer shell
+HOSTNAME="${HOSTNAME}"
+USERNAME="${USERNAME}"
+USERPASS="${USERPASS}"
+ROOTPASS="${ROOTPASS}"
+SUDO_MODE="${SUDO_MODE}"
+FS="${FS}"
+TZONE="${TZONE}"
+P1="${P1}"
+P2="${P2}"
+P3="${P3}"
+
+# Locales — default to en_US.UTF-8
+LOCALES=(en_US.UTF-8)
 
 ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
 
-# Locales
+# Generate locales
 for loc in "${LOCALES[@]}"; do
     sed -i "s/^#\(${loc} UTF-8\)/\1/" /etc/locale.gen || true
 done
 locale-gen
-echo "LANG=\${LOCALES[0]:-en_US.UTF-8}" > /etc/locale.conf
+echo "LANG=${LOCALES[0]}" > /etc/locale.conf
 
 echo "$HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<EOF
@@ -293,13 +290,11 @@ case "$SUDO_MODE" in
 esac
 
 systemctl enable NetworkManager
-
-
 CHROOT
 
-# -------------------------------
+#-------------------------------
 # GRUB installation
-# -------------------------------
+#-------------------------------
 info "Installing GRUB..."
 if [[ $FIRMWARE == UEFI ]]; then
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
@@ -316,10 +311,7 @@ else
     GRUB_CMDLINE="root=UUID=$ROOT_UUID rw"
 fi
 
-# Update /etc/default/grub inside chroot
 arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE\"|' /etc/default/grub"
-
-# Generate GRUB configuration
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 info "GRUB installation and configuration complete!"
