@@ -310,37 +310,50 @@ cd ..
 
 # Install Google Chrome
 sudo -u "$USERNAME" yay -S --noconfirm google-chrome
-YAYCHROOT
 
-# ------------------------
-# Step 2: Interactive program selection
-# ------------------------
-arch-chroot /mnt /bin/bash -e <<INTERACTIVE
-USERNAME=\$(awk -F: '(\$3>=1000)&&(\$1!="nobody"){print \$1; exit}' /etc/passwd)
-USERHOME="/home/\$USERNAME"
-cd "\$USERHOME"
+# Create the interactive selection script for later
+cat > /root/after_selection.sh <<'CHOICE'
+#!/bin/bash
+set -euo pipefail
+
+USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
+USERHOME="/home/$USERNAME"
+cd "$USERHOME"
 
 echo "Choose a program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
 echo "2) Omarchy"
 read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
 
-case "\$PROG_CHOICE" in
+case "$PROG_CHOICE" in
     1) REPO="https://github.com/JaKooLit/Arch-Hyprland" ;;
     2) REPO="https://github.com/basecamp/omarchy" ;;
     *) echo "No custom program selected, skipping."; exit 0 ;;
 esac
 
-DIR=\$(basename "\$REPO" .git)
-if [[ ! -d "\$DIR" ]]; then
-    git clone "\$REPO"
+DIR=$(basename "$REPO" .git)
+if [[ ! -d "$DIR" ]]; then
+    sudo -u "$USERNAME" git clone "$REPO"
 fi
-cd "\$DIR"
+cd "$DIR"
 if [[ -f install.sh ]]; then
-    bash install.sh
+    sudo -u "$USERNAME" bash install.sh
 fi
 
 echo "[INFO] Custom program installation complete!"
-echo "[INFO] Please reboot"
-INTERACTIVE
+CHOICE
 
+chmod +x /root/after_selection.sh
+
+echo "[INFO] Yay and Chrome installed. Run '/root/after_selection.sh' inside chroot to continue."
+YAYCHROOT
+
+# ------------------------
+# Step 2: User runs the interactive script
+# ------------------------
+echo
+echo "=================================================="
+echo "Installation complete!"
+echo "To finish setup, run:"
+echo "    arch-chroot /mnt /root/after_selection.sh"
+echo "=================================================="
