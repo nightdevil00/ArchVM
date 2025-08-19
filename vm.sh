@@ -224,6 +224,10 @@ info "Installing base system..."
 pacstrap -K /mnt "${ALL_PKGS[@]}"
 genfstab -U /mnt >> /mnt/etc/fstab
 
+
+LOCALES_STR="${LOCALES[*]}"
+MICROCODE_STR="${MICROCODE[*]}"
+
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
@@ -238,8 +242,8 @@ ROOTPASS="$ROOTPASS"
 SUDO_MODE="$SUDO_MODE"
 FS="$FS"
 TZONE="$TZONE"
-MICROCODE=(${MICROCODE[@]})
-LOCALES=(${LOCALES[@]:-en_US.UTF-8})
+LOCALES=($LOCALES_STR)
+MICROCODE=($MICROCODE_STR)
 P1="$P1"
 P2="$P2"
 P3="$P3"
@@ -248,11 +252,11 @@ ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
 
 # Locales
-for loc in "${LOCALES[@]:-en_US.UTF-8}"; do
+for loc in "\${LOCALES[@]:-en_US.UTF-8}"; do
     sed -i "s/^#\(${loc} UTF-8\)/\1/" /etc/locale.gen || true
 done
 locale-gen
-echo "LANG=${LOCALES[0]:-en_US.UTF-8}" > /etc/locale.conf
+echo "LANG=\${LOCALES[0]:-en_US.UTF-8}" > /etc/locale.conf
 
 echo "$HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<EOF
