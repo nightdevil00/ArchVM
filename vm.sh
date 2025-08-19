@@ -252,7 +252,7 @@ ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
 
 # Locales
-for loc in "\${LOCALES[@]:-en_US.UTF-8}"; do
+for loc in "${LOCALES[@]}"; do
     sed -i "s/^#\(${loc} UTF-8\)/\1/" /etc/locale.gen || true
 done
 locale-gen
