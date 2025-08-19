@@ -293,7 +293,7 @@ info "Installation complete!"
 #-----------------------------------------
 info "Running after-install tasks inside chroot..."
 
-arch-chroot /mnt /bin/bash -e <<'AFTER'
+arch-chroot /mnt /bin/bash -e <<AFTER
 set -euo pipefail
 
 # Detect the first non-root user in the system
