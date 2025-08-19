@@ -5,7 +5,7 @@ set -euo pipefail
 # Dependencies:
 # pacman -Sy --needed git arch-install-scripts btrfs-progs dosfstools e2fsprogs \
 # cryptsetup grub efibootmgr reflector curl
-#v4
+# v5
 
 #-----------------------------------------
 # Helpers
@@ -228,7 +228,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
-arch-chroot /mnt /bin/bash -e <<'CHROOT'
+arch-chroot /mnt /bin/bash -e <<CHROOT
 set -e
 
 # Default variables passed from outer shell
