@@ -231,18 +231,18 @@ arch-chroot /mnt /bin/bash -e <<'CHROOT'
 set -e
 
 # Variables passed via environment
-HOSTNAME="${HOSTNAME:-archbox}"
-USERNAME="${USERNAME:-arch}"
-USERPASS="${USERPASS:-arch}"
-ROOTPASS="${ROOTPASS:-root}"
-SUDO_MODE="${SUDO_MODE:-pw}"
-FS="${FS:-btrfs}"
-TZONE="${TZONE:-Europe/Bucharest}"
+HOSTNAME="$HOSTNAME"
+USERNAME="$USERNAME"
+USERPASS="$USERPASS"
+ROOTPASS="$ROOTPASS"
+SUDO_MODE="$SUDO_MODE"
+FS="$FS"
+TZONE="$TZONE"
 MICROCODE=(${MICROCODE[@]})
 LOCALES=(${LOCALES[@]})
-P1="${P1}"
-P2="${P2}"
-P3="${P3}"
+P1="$P1"
+P2="$P2"
+P3="$P3"
 
 ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
