@@ -5,7 +5,7 @@ set -euo pipefail
 # Dependencies:
 # pacman -Sy --needed git arch-install-scripts btrfs-progs dosfstools e2fsprogs \
 # cryptsetup grub efibootmgr reflector curl
-#v2
+#v3
 
 #-----------------------------------------
 # Helpers
