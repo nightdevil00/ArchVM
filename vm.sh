@@ -293,3 +293,80 @@ arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 info "Installation complete!"
+#-------------------------------
+# After-install tasks (AUR & custom programs)
+#-------------------------------
+info "Running after-install tasks inside chroot..."
+
+arch-chroot /mnt /bin/bash -e <<AFTER
+set -euo pipefail
+
+USERNAME="$USERNAME"
+echo "[INFO] Running after-install tasks for user: \$USERNAME"
+
+# Ensure networking
+systemctl enable --now NetworkManager || true
+
+# Update system and install required packages
+pacman -Syu --noconfirm
+pacman -S --needed --noconfirm base-devel git
+
+# Make user's home writable for cloning
+mkdir -p /home/\$USERNAME
+chown -R \$USERNAME:\$USERNAME /home/\$USERNAME
+
+# Switch to user home
+cd /home/\$USERNAME
+
+# ------------------------
+# Install yay from AUR
+# ------------------------
+if [[ ! -d yay-bin ]]; then
+    sudo -u \$USERNAME git clone https://aur.archlinux.org/yay-bin.git
+fi
+cd yay-bin
+sudo -u \$USERNAME makepkg -si --noconfirm
+cd ..
+
+# ------------------------
+# Install programs via yay
+# ------------------------
+sudo -u \$USERNAME yay -S --noconfirm google-chrome
+
+# ------------------------
+# Selection for custom programs
+# ------------------------
+echo "Choose a program to install:"
+echo "1) JaKooLit (Arch-Hyprland)"
+echo "2) Omarchy"
+read -rp "Selection [1/2]: " PROG_CHOICE
+PROG_CHOICE=${PROG_CHOICE:-1}
+
+case "\$PROG_CHOICE" in
+    1)
+        REPO="https://github.com/JaKooLit/Arch-Hyprland"
+        ;;
+    2)
+        REPO="https://github.com/basecamp/omarchy"
+        ;;
+    *)
+        echo "Invalid choice, skipping custom program installation."
+        REPO=""
+        ;;
+esac
+
+if [[ -n "\$REPO" ]]; then
+    DIR=\$(basename "\$REPO" .git)
+    if [[ ! -d "\$DIR" ]]; then
+        sudo -u \$USERNAME git clone "\$REPO"
+    fi
+    cd "\$DIR"
+    if [[ -f install.sh ]]; then
+        sudo -u \$USERNAME bash install.sh
+    fi
+fi
+
+echo "[INFO] After-install tasks complete!"
+AFTER
+
+
