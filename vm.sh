@@ -273,7 +273,7 @@ mkinitcpio -P
 
 # Users & sudo
 usermod -p "*" root >/dev/null 2>&1 || true
-useradd -m -G wheel "$USERNAME"
+useradd -m -G wheel --badname "$USERNAME"
 echo "$USERNAME:$USERPASS" | chpasswd
 (echo "$ROOTPASS"; echo "$ROOTPASS") | passwd root
 
