@@ -311,12 +311,12 @@ cd ..
 # Install Google Chrome
 sudo -u "$USERNAME" yay -S --noconfirm google-chrome
 
-# Create the interactive selection script for later
-cat > /root/after_selection.sh <<'CHOICE'
+# Create the interactive selection script in user's home
+cat > "$USERHOME/after_selection.sh" <<'CHOICE'
 #!/bin/bash
 set -euo pipefail
 
-USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
+USERNAME=$(whoami)
 USERHOME="/home/$USERNAME"
 cd "$USERHOME"
 
@@ -333,27 +333,30 @@ esac
 
 DIR=$(basename "$REPO" .git)
 if [[ ! -d "$DIR" ]]; then
-    sudo -u "$USERNAME" git clone "$REPO"
+    git clone "$REPO"
 fi
 cd "$DIR"
 if [[ -f install.sh ]]; then
-    sudo -u "$USERNAME" bash install.sh
+    bash install.sh
 fi
 
 echo "[INFO] Custom program installation complete!"
 CHOICE
 
-chmod +x /root/after_selection.sh
+chmod +x "$USERHOME/after_selection.sh"
+chown "$USERNAME:$USERNAME" "$USERHOME/after_selection.sh"
 
-echo "[INFO] Yay and Chrome installed. Run '/root/after_selection.sh' inside chroot to continue."
+echo "[INFO] Yay and Chrome installed. A script 'after_selection.sh' has been placed in your home folder."
 YAYCHROOT
 
 # ------------------------
-# Step 2: User runs the interactive script
+# Step 2: Ask user to reboot
 # ------------------------
 echo
 echo "=================================================="
 echo "Installation complete!"
-echo "To finish setup, run:"
-echo "    arch-chroot /mnt /root/after_selection.sh"
+echo "Please reboot, log in as your user, and run:"
+echo "    ./after_selection.sh"
+echo "from your home directory to choose and install JaKooLit or Omarchy."
 echo "=================================================="
+
