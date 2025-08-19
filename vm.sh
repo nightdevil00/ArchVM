@@ -273,8 +273,9 @@ mkinitcpio -P
 
 # Users & sudo
 usermod -p "*" root >/dev/null 2>&1 || true
-useradd -m -G wheel --badname "$USERNAME"
-echo "$USERNAME:$USERPASS" | chpasswd
+echo "Creating user: $USERNAME"
+useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo $USERNAME:$PASSWORD | chpasswd
 (echo "$ROOTPASS"; echo "$ROOTPASS") | passwd root
 
 case "$SUDO_MODE" in
