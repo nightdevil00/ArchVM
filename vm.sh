@@ -284,7 +284,9 @@ else
 fi
 
 arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE\"|' /etc/default/grub"
-arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg# ------------------------
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+# ------------------------
 # Step 1: Install yay and Google Chrome
 # ------------------------
 arch-chroot /mnt /bin/bash -e <<'YAYCHROOT'
