@@ -315,33 +315,32 @@ YAYCHROOT
 # ------------------------
 # Step 2: Interactive program selection
 # ------------------------
-arch-chroot /mnt /bin/bash -e
-USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}')
-USERHOME="/home/$USERNAME"
-cd "$USERHOME"
+arch-chroot /mnt /bin/bash -e <<INTERACTIVE
+USERNAME=\$(awk -F: '(\$3>=1000)&&(\$1!="nobody"){print \$1; exit}' /etc/passwd)
+USERHOME="/home/\$USERNAME"
+cd "\$USERHOME"
 
 echo "Choose a program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
 echo "2) Omarchy"
 read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
 
-case "$PROG_CHOICE" in
+case "\$PROG_CHOICE" in
     1) REPO="https://github.com/JaKooLit/Arch-Hyprland" ;;
     2) REPO="https://github.com/basecamp/omarchy" ;;
     *) echo "No custom program selected, skipping."; exit 0 ;;
 esac
 
-DIR=$(basename "$REPO" .git)
-if [[ ! -d "$DIR" ]]; then
-    git clone "$REPO"
+DIR=\$(basename "\$REPO" .git)
+if [[ ! -d "\$DIR" ]]; then
+    git clone "\$REPO"
 fi
-cd "$DIR"
+cd "\$DIR"
 if [[ -f install.sh ]]; then
     bash install.sh
 fi
 
 echo "[INFO] Custom program installation complete!"
-
-
-info "Installation complete!"
+echo "[INFO] Please reboot"
+INTERACTIVE
 
