@@ -318,7 +318,6 @@ set -euo pipefail
 
 USERNAME=$(whoami)
 USERHOME="/home/$USERNAME"
-cd "$USERHOME"
 
 echo "Choose a program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
@@ -326,21 +325,33 @@ echo "2) Omarchy"
 read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
 
 case "$PROG_CHOICE" in
-    1) REPO="https://github.com/JaKooLit/Arch-Hyprland" ;;
-    2) REPO="https://github.com/basecamp/omarchy" ;;
-    *) echo "No custom program selected, skipping."; exit 0 ;;
+    1)
+        REPO="https://github.com/JaKooLit/Arch-Hyprland"
+        DIR="$USERHOME/Arch-Hyprland"
+        ;;
+    2)
+        REPO="https://github.com/basecamp/omarchy"
+        DIR="$USERHOME/.local/share/omarchy"
+        ;;
+    *)
+        echo "No custom program selected, skipping."
+        exit 0
+        ;;
 esac
 
-DIR=$(basename "$REPO" .git)
+# Clone into the right directory
 if [[ ! -d "$DIR" ]]; then
-    git clone "$REPO"
+    git clone "$REPO" "$DIR"
 fi
 cd "$DIR"
+
+# Run installer if present
 if [[ -f install.sh ]]; then
     bash install.sh
 fi
 
-echo "[INFO] Custom program installation complete!"
+echo "[INFO] $PROG_CHOICE installation complete!"
+
 CHOICE
 
 chmod +x "$USERHOME/after_selection.sh"
