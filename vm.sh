@@ -284,64 +284,62 @@ else
 fi
 
 arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE\"|' /etc/default/grub"
-arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-
-info "Installation complete!"
-
-arch-chroot /mnt /bin/bash -e <<AFTER
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg# ------------------------
+# Step 1: Install yay and Google Chrome
+# ------------------------
+arch-chroot /mnt /bin/bash -e <<'YAYCHROOT'
 set -euo pipefail
 
-USERNAME=\$(awk -F: '(\$3>=1000)&&(\$1!="nobody"){print \$1; exit}' /etc/passwd)
-USERHOME="/home/\$USERNAME"
+USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
+USERHOME="/home/$USERNAME"
 
-echo "[INFO] Running after-install tasks for user: \$USERNAME"
-mkdir -p "\$USERHOME"
-chown -R "\$USERNAME:\$USERNAME" "\$USERHOME"
-
-cd "\$USERHOME"
+echo "[INFO] Installing yay and Google Chrome for user: $USERNAME"
+mkdir -p "$USERHOME"
+chown -R "$USERNAME:$USERNAME" "$USERHOME"
+cd "$USERHOME"
 
 # Install yay
 if [[ ! -d yay-bin ]]; then
-    sudo -u "\$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
+    sudo -u "$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
 fi
 cd yay-bin
-sudo -u "\$USERNAME" makepkg -si --noconfirm
+sudo -u "$USERNAME" makepkg -si --noconfirm
 cd ..
 
-# Install google-chrome
-sudo -u "\$USERNAME" yay -S --noconfirm google-chrome
+# Install Google Chrome
+sudo -u "$USERNAME" yay -S --noconfirm google-chrome
+YAYCHROOT
 
-# Interactive selection **inside chroot**
+# ------------------------
+# Step 2: Interactive program selection
+# ------------------------
+arch-chroot /mnt /bin/bash -e
+USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}')
+USERHOME="/home/$USERNAME"
+cd "$USERHOME"
+
 echo "Choose a program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
 echo "2) Omarchy"
 read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
 
-case "\$PROG_CHOICE" in
-    1)
-        REPO="https://github.com/JaKooLit/Arch-Hyprland"
-        ;;
-    2)
-        REPO="https://github.com/basecamp/omarchy"
-        ;;
-    *)
-        echo "[INFO] No custom program selected, skipping."
-        REPO=""
-        ;;
+case "$PROG_CHOICE" in
+    1) REPO="https://github.com/JaKooLit/Arch-Hyprland" ;;
+    2) REPO="https://github.com/basecamp/omarchy" ;;
+    *) echo "No custom program selected, skipping."; exit 0 ;;
 esac
 
-if [[ -n "\$REPO" ]]; then
-    DIR=\$(basename "\$REPO" .git)
-    if [[ ! -d "\$DIR" ]]; then
-        sudo -u "\$USERNAME" git clone "\$REPO"
-    fi
-    cd "\$DIR"
-    if [[ -f install.sh ]]; then
-        sudo -u "\$USERNAME" bash install.sh
-    fi
+DIR=$(basename "$REPO" .git)
+if [[ ! -d "$DIR" ]]; then
+    git clone "$REPO"
+fi
+cd "$DIR"
+if [[ -f install.sh ]]; then
+    bash install.sh
 fi
 
-echo "[INFO] After-install tasks complete!"
-AFTER
+echo "[INFO] Custom program installation complete!"
 
+
+info "Installation complete!"
 
