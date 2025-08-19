@@ -228,43 +228,41 @@ genfstab -U /mnt >> /mnt/etc/fstab
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
+LOCALES_STR="en_US.UTF-8"  # Default locale
+USERNAME="${USERNAME:-archuser}"
+USERPASS="${USERPASS:-archuser}"
+ROOTPASS="${ROOTPASS:-root}"
+SUDO_MODE="${SUDO_MODE:-pw}"
+FS="${FS:-btrfs}"
+TZONE="${TZONE:-Europe/Bucharest}"
+
 arch-chroot /mnt /bin/bash -e <<CHROOT
-set -e
+set -euo pipefail
 
-# Variables passed from outer shell
-HOSTNAME="$HOSTNAME"
-USERNAME="$USERNAME"
-USERPASS="$USERPASS"
-ROOTPASS="$ROOTPASS"
-SUDO_MODE="$SUDO_MODE"
-FS="$FS"
-TZONE="$TZONE"
-P1="$P1"
-P2="$P2"
-P3="$P3"
+# Rebuild array inside chroot
+LOCALES=($LOCALES_STR)
 
-# Locales — default to en_US.UTF-8
-LOCALES=(en_US.UTF-8)
-
-ln -sf /usr/share/zoneinfo/\$TZONE /etc/localtime
+# Timezone
+ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
 
-# Generate locales
+# Locales
 for loc in "\${LOCALES[@]}"; do
     sed -i "s/^#\(${loc} UTF-8\)/\1/" /etc/locale.gen || true
 done
 locale-gen
 echo "LANG=\${LOCALES[0]}" > /etc/locale.conf
 
-echo "\$HOSTNAME" > /etc/hostname
+# Hostname
+echo "${HOSTNAME}" > /etc/hostname
 cat > /etc/hosts <<EOF
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   \$HOSTNAME.localdomain \$HOSTNAME
+127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 EOF
 
 # mkinitcpio hooks
-if [[ "\$FS" == btrfs ]]; then
+if [[ "$FS" == btrfs ]]; then
     sed -i 's/^HOOKS=(.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems btrfs fsck)/' /etc/mkinitcpio.conf
 else
     sed -i 's/^HOOKS=(.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)/' /etc/mkinitcpio.conf
@@ -273,12 +271,12 @@ mkinitcpio -P
 
 # Users & sudo
 usermod -p "*" root >/dev/null 2>&1 || true
-echo "Creating user: \$USERNAME"
-useradd -m -G wheel -s /bin/bash "\$USERNAME"
-echo "\$USERNAME:\$USERPASS" | chpasswd
-(echo "\$ROOTPASS"; echo "\$ROOTPASS") | passwd root
+echo "Creating user: $USERNAME"
+useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo "$USERNAME:$USERPASS" | chpasswd
+echo -e "$ROOTPASS\n$ROOTPASS" | passwd root
 
-case "\$SUDO_MODE" in
+case "$SUDO_MODE" in
     pw)
         sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
         ;;
@@ -291,6 +289,7 @@ case "\$SUDO_MODE" in
         ;;
 esac
 
+# Enable network
 systemctl enable NetworkManager
 CHROOT
 
