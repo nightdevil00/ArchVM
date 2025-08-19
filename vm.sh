@@ -1,34 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run this from the official Arch ISO as root with networking enabled.
-# Dependencies:
-# pacman -Sy --needed git arch-install-scripts btrfs-progs dosfstools e2fsprogs \
-# cryptsetup grub efibootmgr reflector curl
-# v6
-
 #-----------------------------------------
 # Helpers
 #-----------------------------------------
 err() { echo "[ERROR] $*" >&2; exit 1; }
 info() { echo "[INFO] $*"; }
 
-require() {
-    local missing=()
-    for bin in "$@"; do command -v "$bin" >/dev/null 2>&1 || missing+=("$bin"); done
-    (( ${#missing[@]} )) && { echo "Missing: ${missing[*]}"; exit 1; }
-}
-
 [[ $EUID -eq 0 ]] || err "Run as root"
 
 #-----------------------------------------
 # Enable NTP
 #-----------------------------------------
-info "Enabling and starting systemd-timesyncd..."
+info "Enabling systemd-timesyncd..."
 systemctl enable systemd-timesyncd
 systemctl start systemd-timesyncd
-sleep 2
-timedatectl show
 timedatectl set-ntp true
 
 #-----------------------------------------
@@ -38,9 +24,7 @@ mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL | grep -E "/dev/(sd|nvme|vd)" |
 (( ${#DISKS[@]} )) || err "No installable disks found"
 
 echo "Available disks:"
-for i in "${!DISKS[@]}"; do
-    echo "$i) ${DISKS[$i]}"
-done
+for i in "${!DISKS[@]}"; do echo "$i) ${DISKS[$i]}"; done
 read -rp "Select disk index [0]: " DISK_IDX
 DISK_IDX=${DISK_IDX:-0}
 DISK=${DISKS[$DISK_IDX]}
@@ -73,15 +57,15 @@ if [[ $FS == ext4 ]]; then
     read -rp "Create separate /home? [y/N]: " HOME_CHOICE
     [[ "$HOME_CHOICE" =~ ^[Yy]$ ]] && SEPARATE_HOME=yes
     if [[ $SEPARATE_HOME == yes ]]; then
-        read -rp "Enter /home size (rest goes to /, e.g. 100G): " HOME_SIZE
+        read -rp "Enter /home size (rest goes to /, e.g., 100G): " HOME_SIZE
     fi
 fi
 
 #-----------------------------------------
 # User / Host / Locale / Time
 #-----------------------------------------
-read -rp "Hostname [arch]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-arch}
+read -rp "Hostname [archbox]: " HOSTNAME
+HOSTNAME=${HOSTNAME:-archbox}
 
 read -rp "Username [archuser]: " USERNAME
 USERNAME=${USERNAME:-archuser}
@@ -110,9 +94,8 @@ esac
 read -rp "Timezone [Europe/Bucharest]: " TZONE
 TZONE=${TZONE:-Europe/Bucharest}
 
-# Default locale
 LOCALES=(en_US.UTF-8)
-echo "Default locale: ${LOCALES[0]}"
+info "Default locale: ${LOCALES[0]}"
 
 #-----------------------------------------
 # Partitioning
@@ -129,14 +112,11 @@ if [[ $FIRMWARE == BIOS ]]; then
     START=3MiB
 fi
 
-# EFI partition
 parted -s "$DISK" mkpart EFI fat32 $START $EFI_END
 [[ $FIRMWARE == UEFI ]] && parted -s "$DISK" set 1 esp on
 
-# Determine start for next partition
 NEXT_START=$(parted -sm "$DISK" unit MiB print | awk -F: '/^1:/{gsub("MiB","",$3); print $3+1"MiB"}')
 
-# Root / Home partitions
 if [[ $FS == btrfs ]]; then
     parted -s "$DISK" mkpart cryptroot $NEXT_START 100%
 else
@@ -228,40 +208,39 @@ genfstab -U /mnt >> /mnt/etc/fstab
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
-LOCALES_STR="en_US.UTF-8"  # Default locale
+arch-chroot /mnt /bin/bash -e <<'CHROOT'
+set -euo pipefail
+
+# Defaults inside chroot
+HOSTNAME="${HOSTNAME:-arch}"
 USERNAME="${USERNAME:-archuser}"
 USERPASS="${USERPASS:-archuser}"
 ROOTPASS="${ROOTPASS:-root}"
 SUDO_MODE="${SUDO_MODE:-pw}"
 FS="${FS:-btrfs}"
 TZONE="${TZONE:-Europe/Bucharest}"
-
-arch-chroot /mnt /bin/bash -e <<CHROOT
-set -euo pipefail
-
-# Rebuild array inside chroot
-LOCALES=($LOCALES_STR)
+LOCALES=(en_US.UTF-8)
 
 # Timezone
 ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
 hwclock --systohc || true
 
 # Locales
-for loc in "\${LOCALES[@]}"; do
+for loc in "${LOCALES[@]}"; do
     sed -i "s/^#\(${loc} UTF-8\)/\1/" /etc/locale.gen || true
 done
 locale-gen
-echo "LANG=\${LOCALES[0]}" > /etc/locale.conf
+echo "LANG=${LOCALES[0]}" > /etc/locale.conf
 
 # Hostname
-echo "${HOSTNAME}" > /etc/hostname
+echo "$HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<EOF
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 EOF
 
-# mkinitcpio hooks
+# mkinitcpio
 if [[ "$FS" == btrfs ]]; then
     sed -i 's/^HOOKS=(.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems btrfs fsck)/' /etc/mkinitcpio.conf
 else
@@ -293,9 +272,9 @@ esac
 systemctl enable NetworkManager
 CHROOT
 
-#-------------------------------
+#-----------------------------------------
 # GRUB installation
-#-------------------------------
+#-----------------------------------------
 info "Installing GRUB..."
 if [[ $FIRMWARE == UEFI ]]; then
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
@@ -303,7 +282,7 @@ else
     arch-chroot /mnt grub-install --target=i386-pc "$DISK"
 fi
 
-# Configure GRUB parameters depending on FS
+# GRUB config
 if [[ $FS == btrfs ]]; then
     CRYPT_UUID=$(blkid -s UUID -o value "$P2")
     GRUB_CMDLINE="cryptdevice=UUID=$CRYPT_UUID:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw"
