@@ -12,9 +12,10 @@ info() { echo "[INFO] $*"; }
 #-----------------------------------------
 # Enable NTP
 #-----------------------------------------
-info "Enabling systemd-timesyncd..."
+info "Enabling NTP..."
 systemctl enable systemd-timesyncd
 systemctl start systemd-timesyncd
+sleep 2
 timedatectl set-ntp true
 
 #-----------------------------------------
@@ -33,7 +34,6 @@ DISK=${DISK%%|*}
 read -rp "Erase all data on $DISK? [y/N]: " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
 
-# Detect firmware
 FIRMWARE=BIOS
 [[ -d /sys/firmware/efi/efivars ]] && FIRMWARE=UEFI
 info "Firmware detected: $FIRMWARE"
@@ -57,15 +57,15 @@ if [[ $FS == ext4 ]]; then
     read -rp "Create separate /home? [y/N]: " HOME_CHOICE
     [[ "$HOME_CHOICE" =~ ^[Yy]$ ]] && SEPARATE_HOME=yes
     if [[ $SEPARATE_HOME == yes ]]; then
-        read -rp "Enter /home size (rest goes to /, e.g., 100G): " HOME_SIZE
+        read -rp "Enter /home size (rest goes to /, e.g. 100G): " HOME_SIZE
     fi
 fi
 
 #-----------------------------------------
 # User / Host / Locale / Time
 #-----------------------------------------
-read -rp "Hostname [archbox]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-archbox}
+read -rp "Hostname [arch]: " HOSTNAME
+HOSTNAME=${HOSTNAME:-arch}
 
 read -rp "Username [archuser]: " USERNAME
 USERNAME=${USERNAME:-archuser}
@@ -94,8 +94,7 @@ esac
 read -rp "Timezone [Europe/Bucharest]: " TZONE
 TZONE=${TZONE:-Europe/Bucharest}
 
-LOCALES=(en_US.UTF-8)
-info "Default locale: ${LOCALES[0]}"
+LOCALES_STR="en_US.UTF-8"
 
 #-----------------------------------------
 # Partitioning
@@ -131,7 +130,6 @@ fi
 partprobe "$DISK"
 sleep 2
 
-# Partition names
 if [[ $DISK == *nvme* ]]; then
     P1="${DISK}p1"; P2="${DISK}p2"; P3="${DISK}p3"
 else
@@ -208,18 +206,20 @@ genfstab -U /mnt >> /mnt/etc/fstab
 #-----------------------------------------
 # Chroot configuration
 #-----------------------------------------
-arch-chroot /mnt /bin/bash -e <<'CHROOT'
+info "Configuring system inside chroot..."
+arch-chroot /mnt env \
+    USERNAME="$USERNAME" \
+    USERPASS="$USERPASS" \
+    ROOTPASS="$ROOTPASS" \
+    HOSTNAME="$HOSTNAME" \
+    SUDO_MODE="$SUDO_MODE" \
+    FS="$FS" \
+    TZONE="$TZONE" \
+    LOCALES_STR="$LOCALES_STR" \
+    /bin/bash -e <<'CHROOT'
 set -euo pipefail
 
-# Defaults inside chroot
-HOSTNAME="${HOSTNAME:-arch}"
-USERNAME="${USERNAME:-archuser}"
-USERPASS="${USERPASS:-archuser}"
-ROOTPASS="${ROOTPASS:-root}"
-SUDO_MODE="${SUDO_MODE:-pw}"
-FS="${FS:-btrfs}"
-TZONE="${TZONE:-Europe/Bucharest}"
-LOCALES=(en_US.UTF-8)
+LOCALES=($LOCALES_STR)
 
 # Timezone
 ln -sf /usr/share/zoneinfo/$TZONE /etc/localtime
@@ -240,7 +240,7 @@ cat > /etc/hosts <<EOF
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 EOF
 
-# mkinitcpio
+# mkinitcpio hooks
 if [[ "$FS" == btrfs ]]; then
     sed -i 's/^HOOKS=(.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems btrfs fsck)/' /etc/mkinitcpio.conf
 else
@@ -248,13 +248,14 @@ else
 fi
 mkinitcpio -P
 
-# Users & sudo
+# Users
 usermod -p "*" root >/dev/null 2>&1 || true
 echo "Creating user: $USERNAME"
 useradd -m -G wheel -s /bin/bash "$USERNAME"
 echo "$USERNAME:$USERPASS" | chpasswd
 echo -e "$ROOTPASS\n$ROOTPASS" | passwd root
 
+# Sudo
 case "$SUDO_MODE" in
     pw)
         sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
@@ -263,9 +264,7 @@ case "$SUDO_MODE" in
         echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99_wheel_nopw
         chmod 440 /etc/sudoers.d/99_wheel_nopw
         ;;
-    none)
-        :
-        ;;
+    none) ;;
 esac
 
 # Enable network
@@ -273,7 +272,7 @@ systemctl enable NetworkManager
 CHROOT
 
 #-----------------------------------------
-# GRUB installation
+# GRUB
 #-----------------------------------------
 info "Installing GRUB..."
 if [[ $FIRMWARE == UEFI ]]; then
@@ -282,7 +281,6 @@ else
     arch-chroot /mnt grub-install --target=i386-pc "$DISK"
 fi
 
-# GRUB config
 if [[ $FS == btrfs ]]; then
     CRYPT_UUID=$(blkid -s UUID -o value "$P2")
     GRUB_CMDLINE="cryptdevice=UUID=$CRYPT_UUID:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw"
@@ -294,4 +292,4 @@ fi
 arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE\"|' /etc/default/grub"
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-info "GRUB installation and configuration complete!"
+info "Installation complete!"
