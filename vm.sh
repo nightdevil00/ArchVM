@@ -151,22 +151,16 @@ if [[ $FS == btrfs ]]; then
     btrfs subvolume create /mnt/@home
     umount /mnt
 
+    # Mount subvolumes
     mount -o subvol=@,compress=zstd,noatime /dev/mapper/cryptroot /mnt
     mkdir -p /mnt/{boot,home}
     mount -o subvol=@home,compress=zstd,noatime /dev/mapper/cryptroot /mnt/home
     mount "$P1" /mnt/boot
 else
-    if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
-        mkfs.ext4 -F "$P2"
-        mkfs.ext4 -F "$P3"
-        mount "$P2" /mnt
-        mkdir -p /mnt/boot /mnt/home
-        mount "$P3" /mnt/home
-    else
-        mkfs.ext4 -F "$P2"
-        mount "$P2" /mnt
-        mkdir -p /mnt/boot
-    fi
+    # ext4 fallback
+    mkfs.ext4 -F "$P2"
+    mount "$P2" /mnt
+    mkdir -p /mnt/boot
     mount "$P1" /mnt/boot
 fi
 
@@ -293,56 +287,55 @@ arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 info "Installation complete!"
-#-------------------------------
-# After-install tasks (AUR & custom programs)
-#-------------------------------
+#-----------------------------------------
+# After GRUB installation
+#-----------------------------------------
 info "Running after-install tasks inside chroot..."
 
-arch-chroot /mnt /bin/bash -e <<AFTER
+arch-chroot /mnt /bin/bash -i <<'AFTER'
 set -euo pipefail
 
-USERNAME="$USERNAME"
-echo "[INFO] Running after-install tasks for user: \$USERNAME"
+# Passed variables
+USERNAME="${USERNAME:-archuser}"
+
+echo "[INFO] Running after-install tasks for user: $USERNAME"
 
 # Ensure networking
 systemctl enable --now NetworkManager || true
 
-# Update system and install required packages
+# Update system & install base-devel
 pacman -Syu --noconfirm
 pacman -S --needed --noconfirm base-devel git
 
-# Make user's home writable for cloning
-mkdir -p /home/\$USERNAME
-chown -R \$USERNAME:\$USERNAME /home/\$USERNAME
-
-# Switch to user home
-cd /home/\$USERNAME
+# Prepare user's home
+mkdir -p /home/$USERNAME
+chown -R $USERNAME:$USERNAME /home/$USERNAME
+cd /home/$USERNAME
 
 # ------------------------
-# Install yay from AUR
+# Install yay
 # ------------------------
 if [[ ! -d yay-bin ]]; then
-    sudo -u \$USERNAME git clone https://aur.archlinux.org/yay-bin.git
+    sudo -u $USERNAME git clone https://aur.archlinux.org/yay-bin.git
 fi
 cd yay-bin
-sudo -u \$USERNAME makepkg -si --noconfirm
+sudo -u $USERNAME makepkg -si --noconfirm
 cd ..
 
 # ------------------------
 # Install programs via yay
 # ------------------------
-sudo -u \$USERNAME yay -S --noconfirm google-chrome
+sudo -u $USERNAME yay -S --noconfirm google-chrome
 
 # ------------------------
-# Selection for custom programs
+# Interactive custom program selection
 # ------------------------
-echo "Choose a program to install:"
+echo "Choose a custom program to install:"
 echo "1) JaKooLit (Arch-Hyprland)"
 echo "2) Omarchy"
-read -rp "Selection [1/2]: " PROG_CHOICE
-PROG_CHOICE=${PROG_CHOICE:-1}
+read -rp "Selection [1/2, or enter to skip]: " PROG_CHOICE
 
-case "\$PROG_CHOICE" in
+case "$PROG_CHOICE" in
     1)
         REPO="https://github.com/JaKooLit/Arch-Hyprland"
         ;;
@@ -350,19 +343,19 @@ case "\$PROG_CHOICE" in
         REPO="https://github.com/basecamp/omarchy"
         ;;
     *)
-        echo "Invalid choice, skipping custom program installation."
+        echo "Skipping custom program installation."
         REPO=""
         ;;
 esac
 
-if [[ -n "\$REPO" ]]; then
-    DIR=\$(basename "\$REPO" .git)
-    if [[ ! -d "\$DIR" ]]; then
-        sudo -u \$USERNAME git clone "\$REPO"
+if [[ -n "$REPO" ]]; then
+    DIR=$(basename "$REPO" .git)
+    if [[ ! -d "$DIR" ]]; then
+        sudo -u $USERNAME git clone "$REPO"
     fi
-    cd "\$DIR"
+    cd "$DIR"
     if [[ -f install.sh ]]; then
-        sudo -u \$USERNAME bash install.sh
+        sudo -u $USERNAME bash install.sh
     fi
 fi
 
