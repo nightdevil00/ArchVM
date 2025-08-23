@@ -1,0 +1,12 @@
+aic94xx-firmware
+mkinitcpio-firmware
+upd72020x-fw
+wd719x-firmware
+gnome-browser-connector
+google-chrome
+ttf-courier-prime
+localsend-bin
+timeshift
+fastfetch
+fish
+
