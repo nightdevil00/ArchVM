@@ -187,7 +187,7 @@ esac
 
 GPUINFO=$(lspci | grep -E "VGA|3D|Display" || true)
 GPU_PKGS=(mesa)
-echo "$GPUINFO" | grep -qi nvidia && GPU_PKGS+=(nvidia nvidia-utils)
+echo "$GPUINFO" | grep -qi nvidia && GPU_PKGS+=(nvidia nvidia-utils linux-headers nvidia-settings)
 
 BASE_PKGS=(base linux base-devel linux-firmware git networkmanager sudo nano vim \
            btrfs-progs dosfstools e2fsprogs cryptsetup grub efibootmgr reflector)
