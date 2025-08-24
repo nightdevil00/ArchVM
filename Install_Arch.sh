@@ -124,7 +124,7 @@ else
          parted -s "$DISK" mkpart home "-$HOME_SIZE" "100%"
 
     else
-        parted -s "$DISK" mkpart root $NEXT_START 100%
+        parted -s "$DISK" mkpart root "$NEXT_START" "100%"
     fi
 fi
 
