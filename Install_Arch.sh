@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#v3
 #-----------------------------------------
 # Helpers
 #-----------------------------------------
@@ -22,29 +21,18 @@ timedatectl set-ntp true
 #-----------------------------------------
 # Disk selection
 #-----------------------------------------
-DISKS=()  # ensure array is defined even if lsblk finds nothing
 mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL | grep -E "/dev/(sd|nvme|vd)" | awk '{print $1"|"$0}')
-
 (( ${#DISKS[@]} )) || err "No installable disks found"
 
 echo "Available disks:"
-for i in "${!DISKS[@]}"; do
-    echo "$i) ${DISKS[$i]}"
-done
-
+for i in "${!DISKS[@]}"; do echo "$i) ${DISKS[$i]}"; done
 read -rp "Select disk index [0]: " DISK_IDX
 DISK_IDX=${DISK_IDX:-0}
-
-# guard against out-of-range index
-[[ $DISK_IDX =~ ^[0-9]+$ ]] || err "Invalid index"
-[[ $DISK_IDX -lt ${#DISKS[@]} ]] || err "Index out of range"
-
 DISK=${DISKS[$DISK_IDX]}
 DISK=${DISK%%|*}
 
 read -rp "Erase all data on $DISK? [y/N]: " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
-
 
 FIRMWARE=BIOS
 [[ -d /sys/firmware/efi/efivars ]] && FIRMWARE=UEFI
@@ -114,28 +102,28 @@ LOCALES_STR="en_US.UTF-8"
 info "Partitioning $DISK ..."
 parted -s "$DISK" mklabel gpt
 
-START="1MiB"
-EFI_END="$EFI_SIZE"
+START=1MiB
+EFI_END=$EFI_SIZE
 
 if [[ $FIRMWARE == BIOS ]]; then
-    parted -s "$DISK" mkpart bios_boot "$START" "3MiB"
+    parted -s "$DISK" mkpart bios_boot $START 3MiB
     parted -s "$DISK" set 1 bios_grub on
-    START="3MiB"
+    START=3MiB
 fi
 
-parted -s "$DISK" mkpart EFI fat32 "$START" "$EFI_END"
+parted -s "$DISK" mkpart EFI fat32 $START $EFI_END
 [[ $FIRMWARE == UEFI ]] && parted -s "$DISK" set 1 esp on
 
 NEXT_START=$(parted -sm "$DISK" unit MiB print | awk -F: '/^1:/{gsub("MiB","",$3); print $3+1"MiB"}')
 
 if [[ $FS == btrfs ]]; then
-    parted -s "$DISK" mkpart cryptroot "$NEXT_START" "100%"
+    parted -s "$DISK" mkpart cryptroot $NEXT_START 100%
 else
     if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
-        parted -s "$DISK" mkpart root "$NEXT_START" "-${HOME_SIZE}"
-        parted -s "$DISK" mkpart home "-${HOME_SIZE}" "100%"
+        parted -s "$DISK" mkpart root $NEXT_START "-"$HOME_SIZE
+        parted -s "$DISK" mkpart home "-"$HOME_SIZE 100%
     else
-        parted -s "$DISK" mkpart root "$NEXT_START" "100%"
+        parted -s "$DISK" mkpart root $NEXT_START 100%
     fi
 fi
 
@@ -163,23 +151,23 @@ if [[ $FS == btrfs ]]; then
     btrfs subvolume create /mnt/@home
     umount /mnt
 
-    # Mount subvolumes
     mount -o subvol=@,compress=zstd,noatime /dev/mapper/cryptroot /mnt
     mkdir -p /mnt/{boot,home}
     mount -o subvol=@home,compress=zstd,noatime /dev/mapper/cryptroot /mnt/home
     mount "$P1" /mnt/boot
 else
-    # ext4 fallback
-    mkfs.ext4 -F "$P2"
-    mount "$P2" /mnt
-    mkdir -p /mnt/boot
-    mount "$P1" /mnt/boot
-
     if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
+        mkfs.ext4 -F "$P2"
         mkfs.ext4 -F "$P3"
-        mkdir -p /mnt/home
+        mount "$P2" /mnt
+        mkdir -p /mnt/boot /mnt/home
         mount "$P3" /mnt/home
+    else
+        mkfs.ext4 -F "$P2"
+        mount "$P2" /mnt
+        mkdir -p /mnt/boot
     fi
+    mount "$P1" /mnt/boot
 fi
 
 #-----------------------------------------
@@ -205,7 +193,7 @@ esac
 
 GPUINFO=$(lspci | grep -E "VGA|3D|Display" || true)
 GPU_PKGS=(mesa)
-echo "$GPUINFO" | grep -qi nvidia && GPU_PKGS+=(nvidia nvidia-utils linux-headers nvidia-settings)
+echo "$GPUINFO" | grep -qi nvidia && GPU_PKGS+=(nvidia nvidia-utils)
 
 BASE_PKGS=(base linux base-devel linux-firmware git networkmanager sudo nano vim \
            btrfs-progs dosfstools e2fsprogs cryptsetup grub efibootmgr reflector)
@@ -304,87 +292,4 @@ fi
 arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE\"|' /etc/default/grub"
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-# ------------------------
-# Step 1: Install yay and Google Chrome
-# ------------------------
-arch-chroot /mnt /bin/bash -e <<'YAYCHROOT'
-set -euo pipefail
-
-USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
-USERHOME="/home/$USERNAME"
-
-echo "[INFO] Installing yay and Google Chrome for user: $USERNAME"
-mkdir -p "$USERHOME"
-chown -R "$USERNAME:$USERNAME" "$USERHOME"
-cd "$USERHOME"
-
-# Install yay
-if [[ ! -d yay-bin ]]; then
-    sudo -u "$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
-fi
-cd yay-bin
-sudo -u "$USERNAME" makepkg -si --noconfirm
-cd ..
-
-# Install Google Chrome
-sudo -u "$USERNAME" yay -S --noconfirm google-chrome
-
-# Create the interactive selection script in user's home
-cat > "$USERHOME/after_selection.sh" <<'CHOICE'
-#!/bin/bash
-set -euo pipefail
-
-USERNAME=$(whoami)
-USERHOME="/home/$USERNAME"
-
-echo "Choose a program to install:"
-echo "1) JaKooLit (Arch-Hyprland)"
-echo "2) Omarchy"
-read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
-
-case "$PROG_CHOICE" in
-    1)
-        REPO="https://github.com/JaKooLit/Arch-Hyprland"
-        DIR="$USERHOME/Arch-Hyprland"
-        ;;
-    2)
-        REPO="https://github.com/basecamp/omarchy"
-        DIR="$USERHOME/.local/share/omarchy"
-        ;;
-    *)
-        echo "No custom program selected, skipping."
-        exit 0
-        ;;
-esac
-
-# Clone into the right directory
-if [[ ! -d "$DIR" ]]; then
-    git clone "$REPO" "$DIR"
-fi
-cd "$DIR"
-
-# Run installer if present
-if [[ -f install.sh ]]; then
-    bash install.sh
-fi
-
-echo "[INFO] $PROG_CHOICE installation complete!"
-
-CHOICE
-
-chmod +x "$USERHOME/after_selection.sh"
-chown "$USERNAME:$USERNAME" "$USERHOME/after_selection.sh"
-
-echo "[INFO] Yay and Chrome installed. A script 'after_selection.sh' has been placed in your home folder."
-YAYCHROOT
-
-# ------------------------
-# Step 2: Ask user to reboot
-# ------------------------
-echo
-echo "=================================================="
-echo "Installation complete!"
-echo "Please reboot, log in as your user, and run:"
-echo "    ./after_selection.sh"
-echo "from your home directory to choose and install JaKooLit or Omarchy."
-echo "=================================================="
+info "Installation complete!"
