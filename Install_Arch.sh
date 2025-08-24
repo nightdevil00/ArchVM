@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#v2
+#v3
 #-----------------------------------------
 # Helpers
 #-----------------------------------------
@@ -22,18 +22,29 @@ timedatectl set-ntp true
 #-----------------------------------------
 # Disk selection
 #-----------------------------------------
+DISKS=()  # ensure array is defined even if lsblk finds nothing
 mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL | grep -E "/dev/(sd|nvme|vd)" | awk '{print $1"|"$0}')
+
 (( ${#DISKS[@]} )) || err "No installable disks found"
 
 echo "Available disks:"
-for i in "${!DISKS[@]}"; do echo "$i) ${DISKS[$i]}"; done
+for i in "${!DISKS[@]}"; do
+    echo "$i) ${DISKS[$i]}"
+done
+
 read -rp "Select disk index [0]: " DISK_IDX
 DISK_IDX=${DISK_IDX:-0}
+
+# guard against out-of-range index
+[[ $DISK_IDX =~ ^[0-9]+$ ]] || err "Invalid index"
+[[ $DISK_IDX -lt ${#DISKS[@]} ]] || err "Index out of range"
+
 DISK=${DISKS[$DISK_IDX]}
 DISK=${DISK%%|*}
 
 read -rp "Erase all data on $DISK? [y/N]: " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
+
 
 FIRMWARE=BIOS
 [[ -d /sys/firmware/efi/efivars ]] && FIRMWARE=UEFI
