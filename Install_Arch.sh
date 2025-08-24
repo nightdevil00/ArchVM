@@ -102,13 +102,13 @@ LOCALES_STR="en_US.UTF-8"
 info "Partitioning $DISK ..."
 parted -s "$DISK" mklabel gpt
 
-START=1MiB
-EFI_END=$EFI_SIZE
+START="1MiB"
+EFI_END="$EFI_SIZE"
 
 if [[ $FIRMWARE == BIOS ]]; then
-    parted -s "$DISK" mkpart bios_boot "$START" 3MiB
+    parted -s "$DISK" mkpart bios_boot "$START" "3MiB"
     parted -s "$DISK" set 1 bios_grub on
-    START=3MiB
+    START="3MiB"
 fi
 
 parted -s "$DISK" mkpart EFI fat32 "$START" "$EFI_END"
@@ -129,6 +129,7 @@ fi
 
 partprobe "$DISK"
 sleep 2
+
 if [[ $DISK == *nvme* ]]; then
     P1="${DISK}p1"; P2="${DISK}p2"; P3="${DISK}p3"
 else
@@ -161,6 +162,12 @@ else
     mount "$P2" /mnt
     mkdir -p /mnt/boot
     mount "$P1" /mnt/boot
+
+    if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
+        mkfs.ext4 -F "$P3"
+        mkdir -p /mnt/home
+        mount "$P3" /mnt/home
+    fi
 fi
 
 #-----------------------------------------
@@ -369,4 +376,3 @@ echo "Please reboot, log in as your user, and run:"
 echo "    ./after_selection.sh"
 echo "from your home directory to choose and install JaKooLit or Omarchy."
 echo "=================================================="
-
