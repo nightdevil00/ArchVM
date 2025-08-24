@@ -293,3 +293,89 @@ arch-chroot /mnt bash -c "sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 info "Installation complete!"
+
+# ------------------------
+# Step 1: Install yay and Google Chrome
+# ------------------------
+arch-chroot /mnt /bin/bash -e <<'YAYCHROOT'
+set -euo pipefail
+
+USERNAME=$(awk -F: '($3>=1000)&&($1!="nobody"){print $1; exit}' /etc/passwd)
+USERHOME="/home/$USERNAME"
+
+echo "[INFO] Installing yay and Google Chrome for user: $USERNAME"
+mkdir -p "$USERHOME"
+chown -R "$USERNAME:$USERNAME" "$USERHOME"
+cd "$USERHOME"
+
+# Install yay
+if [[ ! -d yay-bin ]]; then
+    sudo -u "$USERNAME" git clone https://aur.archlinux.org/yay-bin.git
+fi
+cd yay-bin
+sudo -u "$USERNAME" makepkg -si --noconfirm
+cd ..
+
+# Install Google Chrome
+sudo -u "$USERNAME" yay -S --noconfirm google-chrome
+
+# Create the interactive selection script in user's home
+cat > "$USERHOME/after_selection.sh" <<'CHOICE'
+#!/bin/bash
+set -euo pipefail
+
+USERNAME=$(whoami)
+USERHOME="/home/$USERNAME"
+
+echo "Choose a program to install:"
+echo "1) JaKooLit (Arch-Hyprland)"
+echo "2) Omarchy"
+read -rp "Selection [1/2, empty to skip]: " PROG_CHOICE
+
+case "$PROG_CHOICE" in
+    1)
+        REPO="https://github.com/JaKooLit/Arch-Hyprland"
+        DIR="$USERHOME/Arch-Hyprland"
+        ;;
+    2)
+        REPO="https://github.com/basecamp/omarchy"
+        DIR="$USERHOME/.local/share/omarchy"
+        ;;
+    *)
+        echo "No custom program selected, skipping."
+        exit 0
+        ;;
+esac
+
+# Clone into the right directory
+if [[ ! -d "$DIR" ]]; then
+    git clone "$REPO" "$DIR"
+fi
+cd "$DIR"
+
+# Run installer if present
+if [[ -f install.sh ]]; then
+    bash install.sh
+fi
+
+echo "[INFO] $PROG_CHOICE installation complete!"
+
+CHOICE
+
+chmod +x "$USERHOME/after_selection.sh"
+chown "$USERNAME:$USERNAME" "$USERHOME/after_selection.sh"
+
+echo "[INFO] Yay and Chrome installed. A script 'after_selection.sh' has been placed in your home folder."
+YAYCHROOT
+
+# ------------------------
+# Step 2: Ask user to reboot
+# ------------------------
+echo
+echo "=================================================="
+echo "Installation complete!"
+echo "Please reboot, log in as your user, and run:"
+echo "    ./after_selection.sh"
+echo "from your home directory to choose and install JaKooLit or Omarchy."
+echo "=================================================="
+
