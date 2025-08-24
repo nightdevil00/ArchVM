@@ -23,6 +23,7 @@ gnome
 gdm
 gnome-tweaks
 gnome-shell-extensions
+gnome-terminal
 
 # --- Drivers ---
 nvidia
@@ -46,6 +47,10 @@ vim
 git
 base-devel
 wget
+vlc
+gparted
+spotify-launcher
+firefox
 EOF
 
 # Customize live environment 
