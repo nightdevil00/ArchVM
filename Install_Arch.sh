@@ -120,8 +120,9 @@ if [[ $FS == btrfs ]]; then
     parted -s "$DISK" mkpart cryptroot $NEXT_START 100%
 else
     if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
-        parted -s "$DISK" mkpart root $NEXT_START "-"$HOME_SIZE
-        parted -s "$DISK" mkpart home "-"$HOME_SIZE 100%
+         parted -s "$DISK" mkpart root "$NEXT_START" "-$HOME_SIZE"
+         parted -s "$DISK" mkpart home "-$HOME_SIZE" "100%"
+
     else
         parted -s "$DISK" mkpart root $NEXT_START 100%
     fi
