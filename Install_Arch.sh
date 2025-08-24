@@ -106,23 +106,22 @@ START=1MiB
 EFI_END=$EFI_SIZE
 
 if [[ $FIRMWARE == BIOS ]]; then
-    parted -s "$DISK" mkpart bios_boot $START 3MiB
+    parted -s "$DISK" mkpart bios_boot "$START" 3MiB
     parted -s "$DISK" set 1 bios_grub on
     START=3MiB
 fi
 
-parted -s "$DISK" mkpart EFI fat32 $START $EFI_END
+parted -s "$DISK" mkpart EFI fat32 "$START" "$EFI_END"
 [[ $FIRMWARE == UEFI ]] && parted -s "$DISK" set 1 esp on
 
 NEXT_START=$(parted -sm "$DISK" unit MiB print | awk -F: '/^1:/{gsub("MiB","",$3); print $3+1"MiB"}')
 
 if [[ $FS == btrfs ]]; then
-    parted -s "$DISK" mkpart cryptroot $NEXT_START 100%
+    parted -s "$DISK" mkpart cryptroot "$NEXT_START" "100%"
 else
     if [[ $SEPARATE_HOME == yes && -n "$HOME_SIZE" ]]; then
-         parted -s "$DISK" mkpart root "$NEXT_START" "-$HOME_SIZE"
-         parted -s "$DISK" mkpart home "-$HOME_SIZE" "100%"
-
+        parted -s "$DISK" mkpart root "$NEXT_START" "-${HOME_SIZE}"
+        parted -s "$DISK" mkpart home "-${HOME_SIZE}" "100%"
     else
         parted -s "$DISK" mkpart root "$NEXT_START" "100%"
     fi
@@ -130,7 +129,6 @@ fi
 
 partprobe "$DISK"
 sleep 2
-
 if [[ $DISK == *nvme* ]]; then
     P1="${DISK}p1"; P2="${DISK}p2"; P3="${DISK}p3"
 else
