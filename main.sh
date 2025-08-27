@@ -713,8 +713,8 @@ case "DOTFILES_PLACEHOLDER" in
         wlogout grim slurp wl-clipboard brightnessctl pavucontrol
         
         # Clone Omarchy dotfiles (adjust URL as needed)
-        git clone https://github.com/omakoto/omarchy-dotfiles.git ~/omarchy-dotfiles
-        cd ~/omarchy-dotfiles
+        git clone https://github.com/basecamp/omarchy ~/.local/share/omarchy
+        cd ~/.local/share/omarchy
         
         # Copy configuration files
         mkdir -p ~/.config
@@ -729,11 +729,11 @@ USER_DOTFILES_EOF
 
 DOTFILES_EOF
         
-        sed -i "s/USERNAME_PLACEHOLDER/$USERNAME/g" /mnt/install_dotfiles.sh
-        sed -i "s/DOTFILES_PLACEHOLDER/$DOTFILES/g" /mnt/install_dotfiles.sh
+        sed -i "s/USERNAME_PLACEHOLDER/$USERNAME/g" /mnt/install.sh
+        sed -i "s/DOTFILES_PLACEHOLDER/$DOTFILES/g" /mnt/install.sh
         
-        chmod +x /mnt/install_dotfiles.sh
-        arch-chroot /mnt /install_dotfiles.sh
+        chmod +x /mnt/install.sh
+        arch-chroot /mnt /install.sh
         
         rm /mnt/install_dotfiles.sh
     fi
@@ -793,8 +793,8 @@ case $choice in
         
         # Clone and install
         cd ~
-        git clone https://github.com/omakoto/omarchy-dotfiles.git
-        cd omarchy-dotfiles
+        git clone https://github.com/basecamp/omarchy.git
+        cd omarchy
         
         # Copy config files
         mkdir -p ~/.config
