@@ -208,6 +208,13 @@ install_base_system() {
         root_part="${disk}${root_part_num}"
     fi
 
+    if [ ! -b "$efi_part" ]; then
+        error "EFI partition $efi_part not found."
+    fi
+    if [ ! -b "$root_part" ]; then
+        error "Root partition $root_part not found."
+    fi
+
     info "Encrypting the root partition..."
     echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --hash sha512 --key-size 512 --iter-time 10000 --use-urandom "$root_part" -
     echo -n "$password" | cryptsetup open "$root_part" cryptroot -
