@@ -201,9 +201,15 @@ install_base_system() {
         root_part="${disk}${root_part_num}"
     fi
 
-    mkfs.fat -F32 "$efi_part"
-    mkfs.btrfs -f "$root_part"
-    mount "$root_part" /mnt
+    info "Encrypting the root partition..."
+    echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --hash sha512 --key-size 512 --iter-time 10000 --use-urandom "$root_part" -
+    echo -n "$password" | cryptsetup open "$root_part" cryptroot -
+
+    info "Creating BTRFS filesystem on the encrypted partition..."
+    mkfs.btrfs -f /dev/mapper/cryptroot
+    mount /dev/mapper/cryptroot /mnt
+
+    info "Creating BTRFS subvolumes..."
     btrfs su cr /mnt/@
     btrfs su cr /mnt/@home
     btrfs su cr /mnt/@pkg
@@ -211,16 +217,20 @@ install_base_system() {
     btrfs su cr /mnt/@snapshots
     umount /mnt
 
-    mount -o noatime,compress=zstd,subvol=@ "$root_part" /mnt
+    info "Mounting subvolumes..."
+    mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
     mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-    mount -o noatime,compress=zstd,subvol=@home "$root_part" /mnt/home
-    mount -o noatime,compress=zstd,subvol=@pkg "$root_part" /mnt/var/cache/pacman/pkg
-    mount -o noatime,compress=zstd,subvol=@log "$root_part" /mnt/var/log
-    mount -o noatime,compress=zstd,subvol=@snapshots "$root_part" /mnt/.snapshots
+    mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
+    mount -o noatime,compress=zstd,subvol=@pkg /dev/mapper/cryptroot /mnt/var/cache/pacman/pkg
+    mount -o noatime,compress=zstd,subvol=@log /dev/mapper/cryptroot /mnt/var/log
+    mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
+    
+    info "Mounting boot partition..."
+    mkfs.fat -F32 "$efi_part"
     mount "$efi_part" /mnt/boot
 
     info "Installing base packages..."
-    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git
+    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup
 
     genfstab -U /mnt >> /mnt/etc/fstab
 }
@@ -233,9 +243,56 @@ configure_system() {
         error "/mnt/bin/bash not found. pacstrap might have failed."
     fi
 
+    info "Configuring mkinitcpio for encryption..."
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+
+    efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
+        efi_part="${disk}p${efi_part_num}"
+        root_part="${disk}p${root_part_num}"
+    else
+        efi_part="${disk}${efi_part_num}"
+        root_part="${disk}${root_part_num}"
+    fi
+
+    boot_part_uuid=$(blkid -s PARTUUID -o value "$efi_part")
+    root_part_uuid=$(blkid -s PARTUUID -o value "$root_part")
+
+    info "Creating Limine config file..."
+    mkdir -p /mnt/boot/EFI/limine
+    echo "TIMEOUT=5" > /mnt/boot/EFI/limine/limine.cfg
+    echo "DEFAULT_ENTRY=1" >> /mnt/boot/EFI/limine/limine.cfg
+    echo ":Arch Linux" >> /mnt/boot/EFI/limine/limine.cfg
+    echo "    PROTOCOL=linux" >> /mnt/boot/EFI/limine/limine.cfg
+    echo "    KERNEL_PATH=uuid($boot_part_uuid):/vmlinuz-linux" >> /mnt/boot/EFI/limine/limine.cfg
+    echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
+    echo "    CMDLINE=cryptdevice=PARTUUID=$root_part_uuid:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw" >> /mnt/boot/EFI/limine/limine.cfg
+
+    if $has_ntfs; then
+        echo "" >> /mnt/boot/EFI/limine/limine.cfg
+        echo ":Windows" >> /mnt/boot/EFI/limine/limine.cfg
+        echo "    PROTOCOL=efi" >> /mnt/boot/EFI/limine/limine.cfg
+        echo "    PATH=uuid($boot_part_uuid):/EFI/Microsoft/Boot/bootmgfw.efi" >> /mnt/boot/EFI/limine/limine.cfg
+    fi
+
+    info "Creating pacman hook for Limine..."
+    mkdir -p /mnt/etc/pacman.d/hooks
+    cat <<EOF > /mnt/etc/pacman.d/hooks/99-limine.hook
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = limine
+
+[Action]
+Description = Deploying Limine after upgrade...
+When = PostTransaction
+Exec = /usr/bin/cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
+EOF
+
     arch-chroot /mnt /bin/bash -c "
         # Install additional packages
-        pacman -S --noconfirm limine snapper networkmanager bluez-utils
+        pacman -S --noconfirm limine snapper networkmanager bluez-utils efibootmgr
 
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
         hwclock --systohc
@@ -253,9 +310,21 @@ configure_system() {
         useradd -m -G wheel -s /bin/bash $username
         echo '$username:$password' | chpasswd
         echo '%wheel ALL=(ALL:ALL) ALL' >> /etc/sudoers
+
+        info \"Regenerating initramfs...\"
+        mkinitcpio -P
         
         # Configure Limine
-        limine-install
+        mkdir -p /boot/EFI/limine
+        cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
+
+        efibootmgr \
+            --create \
+            --disk \"$disk\" \
+            --part \"$efi_part_num\" \
+            --label \"Arch Linux Limine Bootloader\" \
+            --loader '\\EFI\\limine\\BOOTX64.EFI' \
+            --unicode
         
         # Configure Snapper
         snapper -c root create-config /
