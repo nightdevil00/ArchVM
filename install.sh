@@ -282,6 +282,25 @@ configure_system() {
     echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
     echo "    CMDLINE=cryptdevice=PARTUUID=$root_part_uuid:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw" >> /mnt/boot/EFI/limine/limine.cfg
 
+   info "Creating Limine config file..."
+   mkdir -p /mnt/boot/EFI/limine
+
+cat > /mnt/boot/EFI/limine/limine.cfg <<EOF
+timeout: 5
+
+/Arch Linux (linux)
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs
+    module_path: boot():/initramfs-linux.img
+
+/Arch Linux (linux-fallback)
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs
+    module_path: boot():/initramfs-linux-fallback.img
+EOF
+  
     if $has_ntfs; then
         echo "" >> /mnt/boot/EFI/limine/limine.cfg
         echo ":Windows" >> /mnt/boot/EFI/limine/limine.cfg
