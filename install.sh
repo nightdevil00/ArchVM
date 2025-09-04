@@ -182,7 +182,7 @@ partition_disk() {
 
     info "Informing the OS about the new partition table..."
     partprobe "$disk"
-    sleep 3
+    sleep 2
 }
 
 
@@ -234,6 +234,9 @@ configure_system() {
     fi
 
     arch-chroot /mnt /bin/bash -c "
+        # Install additional packages
+        pacman -S --noconfirm limine snapper networkmanager bluez-utils
+
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
         hwclock --systohc
         echo '$language UTF-8' > /etc/locale.gen
@@ -250,9 +253,6 @@ configure_system() {
         useradd -m -G wheel -s /bin/bash $username
         echo '$username:$password' | chpasswd
         echo '%wheel ALL=(ALL:ALL) ALL' >> /etc/sudoers
-
-        # Install additional packages
-        pacman -S --noconfirm limine snapper
         
         # Configure Limine
         limine-install
