@@ -25,17 +25,13 @@ error() {
 
 size_to_mb() {
     size=$1
-    if [[ $size == *"G" ]]
-    then
+    if [[ $size == *"G" ]]; then
         echo $((${size//G/}*1024))
-    elif [[ $size == *"M" ]]
-    then
+    elif [[ $size == *"M" ]]; then
         echo ${size//M/}
-    elif [[ $size == *"K" ]]
-    then
+    elif [[ $size == *"K" ]]; then
         echo $((${size//K/}/1024))
-    elif [[ $size == *"MB" ]]
-    then
+    elif [[ $size == *"MB" ]]; then
         echo ${size//MB/}
     else
         echo $size
@@ -50,8 +46,7 @@ check_root() {
 }
 
 check_dialog() {
-    if ! command -v dialog &> /dev/null;
-    then
+    if ! command -v dialog &> /dev/null; then
         info "dialog could not be found, installing it now."
         pacman -Sy --noconfirm dialog
     fi
@@ -93,10 +88,8 @@ setup_system() {
 partition_disk() {
     info "Partitioning the disk..."
     devices=()
-    while read -r name size model;
-    do
-        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]
-        then
+    while read -r name size model; do
+        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]; then
             devices+=("/dev/$name" "$size $model")
         fi
     done < <(lsblk -d -n -o NAME,SIZE,MODEL)
@@ -114,21 +107,22 @@ partition_disk() {
     # Check for Windows installation
     has_efi=false
     has_ntfs=false
-    while IFS= read -r line;
-    do
+    while IFS= read -r line; do
         if echo "$line" | grep -iq "fat32"; then
             has_efi=true
         fi
         if echo "$line" | grep -iq "ntfs"; then
             has_ntfs=true
         fi
-done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
+    done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
 
-    if $has_efi && $has_ntfs;
-    then
+    if $has_efi && $has_ntfs; then
         dialog --yesno "Windows installation detected on $disk. Do you want to format the entire disk? (WARNING: THIS WILL DELETE WINDOWS)" 10 60
         if [ $? -eq 0 ]; then
             # Format entire disk
+            info "Wiping all signatures from $disk..."
+            wipefs -a "$disk"
+
             efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 512M):" 8 40 "512M" --stdout)
             root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 50G):" 8 40 "50G" --stdout)
 
@@ -180,6 +174,9 @@ done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
             error "Installation aborted by user."
         fi
 
+        info "Wiping all signatures from $disk..."
+        wipefs -a "$disk"
+
         efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 512M):" 8 40 "512M" --stdout)
         root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 50G):" 8 40 "50G" --stdout)
 
@@ -203,8 +200,7 @@ install_base_system() {
     efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
     root_part_num=$(parted -s "$disk" print | grep -i "btrfs" | awk '{print $1}')
 
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]
-    then
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
         efi_part="${disk}p${efi_part_num}"
         root_part="${disk}p${root_part_num}"
     else
@@ -258,8 +254,7 @@ configure_system() {
     sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
 
     efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]
-    then
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
         efi_part="${disk}p${efi_part_num}"
         root_part="${disk}p${root_part_num}"
     else
@@ -280,8 +275,7 @@ configure_system() {
     echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
     echo "    CMDLINE=cryptdevice=PARTUUID=$root_part_uuid:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw" >> /mnt/boot/EFI/limine/limine.cfg
 
-    if $has_ntfs;
-    then
+    if $has_ntfs; then
         echo "" >> /mnt/boot/EFI/limine/limine.cfg
         echo ":Windows" >> /mnt/boot/EFI/limine/limine.cfg
         echo "    PROTOCOL=efi" >> /mnt/boot/EFI/limine/limine.cfg
