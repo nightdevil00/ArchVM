@@ -135,7 +135,8 @@ partition_disk() {
             # Install in free space
             free_space_info=$(parted -s --unit=MB "$disk" print free | grep "Free Space" | tail -n 1)
             if [ -z "$free_space_info" ]; then
-                dialog --msgbox "No free space found on $disk." 8 40
+                dialog --msgbox "No free space found on $disk."
+ 8 40
                 error "Installation aborted."
             fi
 
@@ -189,6 +190,7 @@ partition_disk() {
 
     info "Informing the OS about the new partition table..."
     partprobe "$disk"
+    blockdev --rereadpt "$disk"
     sleep 2
 }
 
