@@ -182,6 +182,7 @@ partition_disk() {
 
     info "Informing the OS about the new partition table..."
     partprobe "$disk"
+    sleep 3
 }
 
 
@@ -219,7 +220,7 @@ install_base_system() {
     mount "$efi_part" /mnt/boot
 
     info "Installing base packages..."
-    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git --parallel=8
+    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git
 
     genfstab -U /mnt >> /mnt/etc/fstab
 }
