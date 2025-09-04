@@ -179,6 +179,9 @@ partition_disk() {
         parted -s "$disk" set 1 esp on
         parted -s "$disk" mkpart primary btrfs "$efi_size" 100%
     fi
+
+    info "Informing the OS about the new partition table..."
+    partprobe "$disk"
 }
 
 
