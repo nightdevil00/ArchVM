@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Arch Linux Installation Script
-# Based on the requirements from file.txt and log files.
+
 
 # --- Logging ---
 log_file="/root/arch_install_$(date +%Y-%m-%d_%H-%M-%S).log"
