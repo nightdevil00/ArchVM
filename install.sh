@@ -55,13 +55,16 @@ check_dialog() {
 # --- User Input ---
 get_user_info() {
     username=$(dialog --inputbox "Enter your desired username:" 8 40 --stdout)
-    password=$(dialog --passwordbox "Enter your password:" 8 40 --stdout)
-    password_confirm=$(dialog --passwordbox "Confirm your password:" 8 40 --stdout)
-
-    if [ "$password" != "$password_confirm" ]; then
-        dialog --msgbox "Passwords do not match." 8 40
-        get_user_info
-    fi
+    
+    while true; do
+        password=$(dialog --passwordbox "Enter your password:" 8 40 --stdout)
+        password_confirm=$(dialog --passwordbox "Confirm your password:" 8 40 --stdout)
+        if [ "$password" == "$password_confirm" ]; then
+            break
+        else
+            dialog --msgbox "Passwords do not match. Please try again." 8 40
+        fi
+    done
 
     locale=$(dialog --inputbox "Enter your desired locale (e.g., us):" 8 40 "us" --stdout)
     language=$(dialog --inputbox "Enter your desired system language (e.g., en_US.UTF-8):" 8 40 "en_US.UTF-8" --stdout)
@@ -203,8 +206,15 @@ install_base_system() {
    partprobe "$disk"
    sleep 2  # wait a moment
 
-  # Get EFI partition (first partition)
-   efi_part=$(lsblk -ln -o NAME,TYPE "$disk" | awk '$2=="part" {print "/dev/"$1}' | head -n1)
+  # Determine partition names
+   if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
+        efi_part="${disk}p1"
+        root_part="${disk}p2"
+   else
+        efi_part="${disk}1"
+        root_part="${disk}2"
+   fi
+
 # Get root partition (last partition)
    root_part=$(lsblk -ln -o NAME,TYPE "$disk" | awk '$2=="part" {print "/dev/"$1}' | tail -n1)
 
@@ -260,15 +270,6 @@ configure_system() {
     info "Configuring mkinitcpio for encryption..."
     sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
 
-    efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
-        efi_part="${disk}p${efi_part_num}"
-        root_part="${disk}p${root_part_num}"
-    else
-        efi_part="${disk}${efi_part_num}"
-        root_part="${disk}${root_part_num}"
-    fi
-
     boot_part_uuid=$(blkid -s PARTUUID -o value "$efi_part")
     root_part_uuid=$(blkid -s PARTUUID -o value "$root_part")
 
@@ -280,9 +281,7 @@ configure_system() {
     echo "    PROTOCOL=linux" >> /mnt/boot/EFI/limine/limine.cfg
     echo "    KERNEL_PATH=uuid($boot_part_uuid):/vmlinuz-linux" >> /mnt/boot/EFI/limine/limine.cfg
     echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
-    echo "    CMDLINE=cryptdevice=PARTUUID=$root_part_uuid:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw" >> /mnt/boot/EFI/limine/limine.cfg
-
-   info "Creating Limine config file..."
+    info "Creating Limine config file..."
    mkdir -p /mnt/boot/EFI/limine
 
 cat > /mnt/boot/EFI/limine/limine.cfg <<EOF
