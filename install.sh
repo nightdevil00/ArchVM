@@ -199,23 +199,21 @@ partition_disk() {
 install_base_system() {
     info "Installing the base system..."
     # Find the partition numbers
-    efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
-    root_part_num=$(parted -s "$disk" print | grep -i "btrfs" | awk '{print $1}')
+   # Ensure kernel sees new partitions
+   partprobe "$disk"
+   sleep 2  # wait a moment
 
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
-        efi_part="${disk}p${efi_part_num}"
-        root_part="${disk}p${root_part_num}"
-    else
-        efi_part="${disk}${efi_part_num}"
-        root_part="${disk}${root_part_num}"
-    fi
+  # Get EFI partition (first partition)
+   efi_part=$(lsblk -ln -o NAME,TYPE "$disk" | awk '$2=="part" {print "/dev/"$1}' | head -n1)
+# Get root partition (last partition)
+   root_part=$(lsblk -ln -o NAME,TYPE "$disk" | awk '$2=="part" {print "/dev/"$1}' | tail -n1)
 
-    if [ ! -b "$efi_part" ]; then
-        error "EFI partition $efi_part not found."
-    fi
-    if [ ! -b "$root_part" ]; then
-        error "Root partition $root_part not found."
-    fi
+   if [ ! -b "$efi_part" ]; then
+    error "EFI partition $efi_part not found."
+   fi
+  if [ ! -b "$root_part" ]; then
+    error "Root partition $root_part not found."
+  fi
 
     info "Encrypting the root partition..."
     echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --hash sha512 --key-size 512 --iter-time 10000 --use-urandom "$root_part" -
