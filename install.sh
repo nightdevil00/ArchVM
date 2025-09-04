@@ -123,8 +123,8 @@ partition_disk() {
             info "Wiping all signatures from $disk..."
             wipefs -a "$disk"
 
-            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 512M):" 8 40 "512M" --stdout)
-            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 50G):" 8 40 "50G" --stdout)
+            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
+            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
 
             info "Partitioning $disk..."
             parted -s "$disk" mklabel gpt
@@ -149,8 +149,8 @@ partition_disk() {
                 error "Installation aborted by user."
             fi
 
-            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 512M):" 8 40 "512M" --stdout)
-            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 50G):" 8 40 "50G" --stdout)
+            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
+            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
 
             efi_size_mb=$(size_to_mb "$efi_size")
             root_size_mb=$(size_to_mb "$root_size")
@@ -178,8 +178,8 @@ partition_disk() {
         info "Wiping all signatures from $disk..."
         wipefs -a "$disk"
 
-        efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 512M):" 8 40 "512M" --stdout)
-        root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 50G):" 8 40 "50G" --stdout)
+        efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
+        root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
 
         info "Partitioning $disk..."
         parted -s "$disk" mklabel gpt
