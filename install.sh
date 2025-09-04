@@ -189,9 +189,17 @@ install_base_system() {
     efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
     root_part_num=$(parted -s "$disk" print | grep -i "btrfs" | awk '{print $1}')
 
-    mkfs.fat -F32 "${disk}p${efi_part_num}"
-    mkfs.btrfs -f "${disk}p${root_part_num}"
-    mount "${disk}p${root_part_num}" /mnt
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
+        efi_part="${disk}p${efi_part_num}"
+        root_part="${disk}p${root_part_num}"
+    else
+        efi_part="${disk}${efi_part_num}"
+        root_part="${disk}${root_part_num}"
+    fi
+
+    mkfs.fat -F32 "$efi_part"
+    mkfs.btrfs -f "$root_part"
+    mount "$root_part" /mnt
     btrfs su cr /mnt/@
     btrfs su cr /mnt/@home
     btrfs su cr /mnt/@pkg
@@ -199,13 +207,13 @@ install_base_system() {
     btrfs su cr /mnt/@snapshots
     umount /mnt
 
-    mount -o noatime,compress=zstd,subvol=@ "${disk}p${root_part_num}" /mnt
+    mount -o noatime,compress=zstd,subvol=@ "$root_part" /mnt
     mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-    mount -o noatime,compress=zstd,subvol=@home "${disk}p${root_part_num}" /mnt/home
-    mount -o noatime,compress=zstd,subvol=@pkg "${disk}p${root_part_num}" /mnt/var/cache/pacman/pkg
-    mount -o noatime,compress=zstd,subvol=@log "${disk}p${root_part_num}" /mnt/var/log
-    mount -o noatime,compress=zstd,subvol=@snapshots "${disk}p${root_part_num}" /mnt/.snapshots
-    mount "${disk}p${efi_part_num}" /mnt/boot
+    mount -o noatime,compress=zstd,subvol=@home "$root_part" /mnt/home
+    mount -o noatime,compress=zstd,subvol=@pkg "$root_part" /mnt/var/cache/pacman/pkg
+    mount -o noatime,compress=zstd,subvol=@log "$root_part" /mnt/var/log
+    mount -o noatime,compress=zstd,subvol=@snapshots "$root_part" /mnt/.snapshots
+    mount "$efi_part" /mnt/boot
 
     info "Installing base packages..."
     pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git --parallel=8
