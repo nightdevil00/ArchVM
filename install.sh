@@ -85,8 +85,22 @@ setup_system() {
 # --- Disk Partitioning ---
 partition_disk() {
     info "Partitioning the disk..."
-    mapfile -t devices < <(lsblk -d -n -o NAME,SIZE,MODEL | awk '$1 ~ /^(sd|nvme|vd|mmcblk)/ {print "/dev/"$1, "\""$2, $3"\""}')
+    devices=()
+    while read -r name size model; do
+        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]; then
+            devices+=("/dev/$name" "$size $model")
+        fi
+    done < <(lsblk -d -n -o NAME,SIZE,MODEL)
+
+    if [ ${#devices[@]} -eq 0 ]; then
+        error "No disks found."
+    fi
+
     disk=$(dialog --menu "Select a disk for installation:" 15 70 15 "${devices[@]}" --stdout)
+
+    if [ -z "$disk" ]; then
+        error "No disk selected. Installation aborted."
+    fi
 
     # Check for Windows installation
     has_efi=false
