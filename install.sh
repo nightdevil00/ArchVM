@@ -25,12 +25,18 @@ error() {
 
 size_to_mb() {
     size=$1
-    if [[ $size == *"G" ]]; then
+    if [[ $size == *"G" ]]
+    then
         echo $((${size//G/}*1024))
-    elif [[ $size == *"M" ]]; then
+    elif [[ $size == *"M" ]]
+    then
         echo ${size//M/}
-    elif [[ $size == *"K" ]]; then
+    elif [[ $size == *"K" ]]
+    then
         echo $((${size//K/}/1024))
+    elif [[ $size == *"MB" ]]
+    then
+        echo ${size//MB/}
     else
         echo $size
     fi
@@ -44,7 +50,8 @@ check_root() {
 }
 
 check_dialog() {
-    if ! command -v dialog &> /dev/null; then
+    if ! command -v dialog &> /dev/null;
+    then
         info "dialog could not be found, installing it now."
         pacman -Sy --noconfirm dialog
     fi
@@ -86,8 +93,10 @@ setup_system() {
 partition_disk() {
     info "Partitioning the disk..."
     devices=()
-    while read -r name size model; do
-        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]; then
+    while read -r name size model;
+    do
+        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]
+        then
             devices+=("/dev/$name" "$size $model")
         fi
     done < <(lsblk -d -n -o NAME,SIZE,MODEL)
@@ -105,16 +114,18 @@ partition_disk() {
     # Check for Windows installation
     has_efi=false
     has_ntfs=false
-    while IFS= read -r line; do
+    while IFS= read -r line;
+    do
         if echo "$line" | grep -iq "fat32"; then
             has_efi=true
         fi
         if echo "$line" | grep -iq "ntfs"; then
             has_ntfs=true
         fi
-    done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
+done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
 
-    if $has_efi && $has_ntfs; then
+    if $has_efi && $has_ntfs;
+    then
         dialog --yesno "Windows installation detected on $disk. Do you want to format the entire disk? (WARNING: THIS WILL DELETE WINDOWS)" 10 60
         if [ $? -eq 0 ]; then
             # Format entire disk
@@ -128,17 +139,17 @@ partition_disk() {
             parted -s "$disk" mkpart primary btrfs "$efi_size" 100%
         else
             # Install in free space
-            free_space_info=$(parted -s "$disk" print free | grep "Free Space" | tail -n 1)
+            free_space_info=$(parted -s --unit=MB "$disk" print free | grep "Free Space" | tail -n 1)
             if [ -z "$free_space_info" ]; then
                 dialog --msgbox "No free space found on $disk." 8 40
                 error "Installation aborted."
             fi
 
-            free_space_start=$(echo "$free_space_info" | awk '{print $1}')
-            free_space_end=$(echo "$free_space_info" | awk '{print $2}')
-            free_space_size=$(echo "$free_space_info" | awk '{print $3}')
+            free_space_start=$(echo "$free_space_info" | awk '{print $1}' | sed 's/MB//')
+            free_space_end=$(echo "$free_space_info" | awk '{print $2}' | sed 's/MB//')
+            free_space_size_mb=$(echo "$free_space_info" | awk '{print $3}' | sed 's/MB//')
 
-            dialog --yesno "Found $free_space_size of free space starting at $free_space_start. Do you want to install Arch Linux in this space?" 8 70
+            dialog --yesno "Found ${free_space_size_mb}MB of free space starting at ${free_space_start}MB. Do you want to install Arch Linux in this space?" 8 70
             if [ $? -ne 0 ]; then
                 error "Installation aborted by user."
             fi
@@ -148,18 +159,17 @@ partition_disk() {
 
             efi_size_mb=$(size_to_mb "$efi_size")
             root_size_mb=$(size_to_mb "$root_size")
-            free_space_size_mb=$(size_to_mb "$free_space_size")
 
             if [ $(($efi_size_mb + $root_size_mb)) -gt $free_space_size_mb ]; then
                 dialog --msgbox "Not enough free space for the requested partition sizes." 8 60
                 error "Installation aborted."
             fi
 
-            efi_part_end=$(echo "$free_space_start" | sed 's/MB//' | awk -v efi_size="$efi_size_mb" '{print $1 + efi_size}')
-            root_part_end=$(echo "$efi_part_end" | awk -v root_size="$root_size_mb" '{print $1 + root_size}')
+            efi_part_end=$(awk -v efi_size="$efi_size_mb" 'BEGIN {print $1 + efi_size}')
+            root_part_end=$(awk -v root_size="$root_size_mb" 'BEGIN {print $1 + root_size}')
 
             info "Creating partitions in free space..."
-            parted -s "$disk" mkpart ESP fat32 "$free_space_start" "${efi_part_end}MB"
+            parted -s "$disk" mkpart ESP fat32 "${free_space_start}MB" "${efi_part_end}MB"
             parted -s "$disk" set 1 esp on
             parted -s "$disk" mkpart primary btrfs "${efi_part_end}MB" "${root_part_end}MB"
         fi
@@ -193,7 +203,8 @@ install_base_system() {
     efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
     root_part_num=$(parted -s "$disk" print | grep -i "btrfs" | awk '{print $1}')
 
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]
+    then
         efi_part="${disk}p${efi_part_num}"
         root_part="${disk}p${root_part_num}"
     else
@@ -207,7 +218,7 @@ install_base_system() {
 
     info "Creating BTRFS filesystem on the encrypted partition..."
     mkfs.btrfs -f /dev/mapper/cryptroot
-    mount /dev/mapper/cryptroot /mnt
+    mount /dev/mapper/cryptroot /mnt || error "Failed to mount cryptroot."
 
     info "Creating BTRFS subvolumes..."
     btrfs su cr /mnt/@
@@ -215,19 +226,19 @@ install_base_system() {
     btrfs su cr /mnt/@pkg
     btrfs su cr /mnt/@log
     btrfs su cr /mnt/@snapshots
-    umount /mnt
+    umount /mnt || error "Failed to unmount cryptroot."
 
     info "Mounting subvolumes..."
-    mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
+    mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt || error "Failed to mount @ subvolume."
     mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-    mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
-    mount -o noatime,compress=zstd,subvol=@pkg /dev/mapper/cryptroot /mnt/var/cache/pacman/pkg
-    mount -o noatime,compress=zstd,subvol=@log /dev/mapper/cryptroot /mnt/var/log
-    mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
+    mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home || error "Failed to mount @home subvolume."
+    mount -o noatime,compress=zstd,subvol=@pkg /dev/mapper/cryptroot /mnt/var/cache/pacman/pkg || error "Failed to mount @pkg subvolume."
+    mount -o noatime,compress=zstd,subvol=@log /dev/mapper/cryptroot /mnt/var/log || error "Failed to mount @log subvolume."
+    mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots || error "Failed to mount @snapshots subvolume."
     
     info "Mounting boot partition..."
     mkfs.fat -F32 "$efi_part"
-    mount "$efi_part" /mnt/boot
+    mount "$efi_part" /mnt/boot || error "Failed to mount boot partition."
 
     info "Installing base packages..."
     pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup
@@ -247,7 +258,8 @@ configure_system() {
     sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
 
     efi_part_num=$(parted -s "$disk" print | grep -i "esp" | awk '{print $1}')
-    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]; then
+    if [[ $disk == /dev/nvme* || $disk == /dev/mmcblk* ]]
+    then
         efi_part="${disk}p${efi_part_num}"
         root_part="${disk}p${root_part_num}"
     else
@@ -268,7 +280,8 @@ configure_system() {
     echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
     echo "    CMDLINE=cryptdevice=PARTUUID=$root_part_uuid:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw" >> /mnt/boot/EFI/limine/limine.cfg
 
-    if $has_ntfs; then
+    if $has_ntfs;
+    then
         echo "" >> /mnt/boot/EFI/limine/limine.cfg
         echo ":Windows" >> /mnt/boot/EFI/limine/limine.cfg
         echo "    PROTOCOL=efi" >> /mnt/boot/EFI/limine/limine.cfg
