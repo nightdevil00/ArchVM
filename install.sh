@@ -3,6 +3,16 @@
 # Arch Linux Installation Script
 # Based on the requirements from file.txt and log files.
 
+# --- Logging ---
+log_file="/root/arch_install_$(date +%Y-%m-%d_%H-%M-%S).log"
+exec &> >(tee -a "$log_file")
+
+log_failure() {
+    error "Script failed. Log saved to $log_file"
+}
+
+trap log_failure ERR
+
 # --- Helper Functions ---
 info() {
     echo -e "\e[34m[INFO]\e[0m $1"
@@ -75,7 +85,7 @@ setup_system() {
 # --- Disk Partitioning ---
 partition_disk() {
     info "Partitioning the disk..."
-    mapfile -t devices < <(lsblk -d -n -o NAME,SIZE,MODEL | awk '$1 ~ /^(sd|nvme|vd|mmcblk)/ {print "/dev/"$1, $2, $3}')
+    mapfile -t devices < <(lsblk -d -n -o NAME,SIZE,MODEL | awk '$1 ~ /^(sd|nvme|vd|mmcblk)/ {print "/dev/"$1, "\""$2, $3"\""}')
     disk=$(dialog --menu "Select a disk for installation:" 15 70 15 "${devices[@]}" --stdout)
 
     # Check for Windows installation
