@@ -227,6 +227,11 @@ install_base_system() {
 # --- Configuration ---
 configure_system() {
     info "Configuring the system..."
+
+    if [ ! -f /mnt/bin/bash ]; then
+        error "/mnt/bin/bash not found. pacstrap might have failed."
+    fi
+
     arch-chroot /mnt /bin/bash -c "
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
         hwclock --systohc
