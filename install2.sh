@@ -272,7 +272,7 @@ install_base_system() {
     mount "$efi_part" /mnt/boot || error "Failed to mount boot partition."
 
     info "Installing base packages..."
-    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup limine snapper networkmanager bluez-utils efibootmgr limine-snapper-sync limine-mkinitcpio-hook
+    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup grub snapper networkmanager bluez-utils efibootmgr grub-btrfs
 
     genfstab -U /mnt >> /mnt/etc/fstab
 }
@@ -287,74 +287,12 @@ configure_system() {
 
     root_part_uuid=$(blkid -s PARTUUID -o value "$root_part")
 
-    info "Configuring mkinitcpio for encryption and plymouth..."
-    sed -i 's/^HOOKS=.*/HOOKS=(base udev plymouth autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck btrfs-overlayfs)/' /mnt/etc/mkinitcpio.conf
+    info "Configuring mkinitcpio for encryption..."
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
 
-    info "Creating Limine config file..."
-    mkdir -p /mnt/boot/EFI/limine
-    sudo tee /mnt/boot/limine.conf <<EOF >/dev/null
-### Read more at config document: https://github.com/limine-bootloader/limine/blob/trunk/CONFIG.md
-#timeout: 3
-default_entry: 2
-interface_branding: ArchLinux Bootloader
-interface_branding_color: 2
-hash_mismatch_panic: no
-
-term_background: 1a1b26
-backdrop: 1a1b26
-
-# Terminal colors (Tokyo Night palette)
-term_palette: 15161e;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;a9b1d6
-term_palette_bright: 414868;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;c0caf5
-
-# Text colors
-term_foreground: c0caf5
-term_foreground_bright: c0caf5
-term_background_bright: 24283b
- 
-EOF
-
-    CMDLINE="cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs"
-    sudo tee /mnt/etc/default/limine <<EOF >/dev/null
-TARGET_OS_NAME="ArchLinux"
-
-ESP_PATH="/boot"
-
-KERNEL_CMDLINE[default]="$CMDLINE"
-KERNEL_CMDLINE[default]+="quiet splash"
-
-ENABLE_UKI=yes
-
-ENABLE_LIMINE_FALLBACK=yes
-
-# Find and add other bootloaders
-FIND_BOOTLOADERS=yes
-
-BOOT_ORDER="*, *fallback, Snapshots"
-
-MAX_SNAPSHOT_ENTRIES=5
-
-SNAPSHOT_FORMAT_CHOICE=5
-EOF
-
-    if [[ -z $EFI ]]; then
-        sudo sed -i '/^ENABLE_UKI=/d; /^ENABLE_LIMINE_FALLBACK=/d' /mnt/etc/default/limine
-    fi
-
-    info "Creating pacman hook for Limine..."
-    mkdir -p /mnt/etc/pacman.d/hooks
-    cat <<EOF > /mnt/etc/pacman.d/hooks/99-limine.hook
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Package
-Target = limine
-
-[Action]
-Description = Deploying Limine after upgrade...
-When = PostTransaction
-Exec = /usr/bin/cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
-EOF
+    info "Configuring GRUB..."
+    sed -i "s/^GRUB_CMDLINE_LINUX=\"\"/GRUB_CMDLINE_LINUX=\"cryptdevice=PARTUUID=$root_part_uuid:cryptroot quiet splash\"/"
+    sed -i 's/#GRUB_ENABLE_CRYPTODISK/GRUB_ENABLE_CRYPTODISK/' /mnt/etc/default/grub
 
     arch-chroot /mnt /bin/bash -c "
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
@@ -377,16 +315,9 @@ EOF
         info \"Regenerating initramfs...\"
         mkinitcpio -P
         
-        # Configure Limine
-        limine-update
-
-        efibootmgr \
-            --create \
-            --disk \"$disk\" \
-            --part \"$efi_part_num\" \
-            --label \"Arch Linux Limine Bootloader\" \
-            --loader '\\EFI\\limine\\BOOTX64.EFI' \
-            --unicode
+        info \"Installing GRUB...\"
+        grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+        grub-mkconfig -o /boot/grub/grub.cfg
         
         # Configure Snapper
         snapper -c root create-config /
@@ -410,36 +341,26 @@ EOF
         systemctl enable bluetooth
         systemctl enable snapper-timeline.timer
         systemctl enable snapper-cleanup.timer
-        systemctl enable limine-snapper-sync.service
-
-        # Add UKI entry to UEFI
-        if efibootmgr &>/dev/null && ! efibootmgr | grep -q ArchLinux &&
-          ! cat /sys/class/dmi/id/bios_vendor 2>/dev/null | grep -qi \"American Megatrends\"; then
-          efibootmgr --create \
-            --disk \"$(findmnt -n -o SOURCE /boot | sed 's/p\?[0-9]*$//')\" \
-            --part \"$(findmnt -n -o SOURCE /boot | grep -o 'p\?[0-9]*$' | sed 's/^p//')\" \
-            --label \"ArchLinux\" \
-            --loader \"\\EFI\\Linux\\\$(cat /etc/machine-id)_linux.efi\"
-        fi
+        systemctl enable grub-btrfs.path
 
         # Add a helper to create a new snapshot
         tee /usr/local/bin/new-snapshot <<'EOF' >/dev/null
 #!/bin/bash
 
 # Check if running as root
-if [ \"$EUID\" -ne 0 ]; then
-  echo \"Please run as root\"
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run as root"
   exit 1
 fi
 
 # Check if a description is provided
-if [ -z \"$1\" ]; then
-  echo \"Usage: $0 <description>\"
+if [ -z "$1" ]; then
+  echo "Usage: $0 <description>"
   exit 1
 fi
 
 # Create a new snapshot with the provided description
-snapper -c root create --description \"$1\"
+snapper -c root create --description "$1"
 EOF
 
         chmod +x /usr/local/bin/new-snapshot
