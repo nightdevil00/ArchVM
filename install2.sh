@@ -104,86 +104,10 @@ partition_disk() {
         error "No disks found."
     fi
 
-    disk=$(dialog --menu "Select a disk for installation:" 15 70 15 "${devices[@]}" --stdout)
-
-    if [ -z "$disk" ]; then
-        error "No disk selected. Installation aborted."
-    fi
-
-    # Check for Windows installation
-    has_efi=false
-    has_ntfs=false
-    while IFS= read -r line; do
-        if echo "$line" | grep -iq "fat32"; then
-            has_efi=true
-        fi
-        if echo "$line" | grep -iq "ntfs"; then
-            has_ntfs=true
-        fi
-    done < <(lsblk -f -n -o FSTYPE,NAME "$disk")
-
-    if $has_efi && $has_ntfs; then
-        dialog --yesno "Windows installation detected on $disk. Do you want to format the entire disk? (WARNING: THIS WILL DELETE WINDOWS)" 10 60
-        if [ $? -eq 0 ]; then
-            # Format entire disk
-            info "Wiping all signatures from $disk..."
-            wipefs -a "$disk"
-
-            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
-            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
-
-            info "Partitioning $disk..."
-            parted -s "$disk" mklabel gpt
-            parted -s "$disk" mkpart ESP fat32 1MiB "$efi_size"
-            parted -s "$disk" set 1 esp on
-            parted -s "$disk" mkpart primary btrfs "$efi_size" 100%
-        else
-            # Install in free space
-            free_space_info=$(parted -s --unit=MB "$disk" print free | grep "Free Space" | tail -n 1)
-            if [ -z "$free_space_info" ]; then
-                dialog --msgbox "No free space found on $disk."
- 8 40
-                error "Installation aborted."
-            fi
-
-            free_space_start=$(echo "$free_space_info" | awk '{print $1}' | sed 's/MB//')
-            free_space_end=$(echo "$free_space_info" | awk '{print $2}' | sed 's/MB//')
-            free_space_size_mb=$(echo "$free_space_info" | awk '{print $3}' | sed 's/MB//')
-
-            dialog --yesno "Found ${free_space_size_mb}MB of free space starting at ${free_space_start}MB. Do you want to install Arch Linux in this space?" 8 70
-            if [ $? -ne 0 ]; then
-                error "Installation aborted by user."
-            fi
-
-            efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
-            root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
-
-            efi_size_mb=$(size_to_mb "$efi_size")
-            root_size_mb=$(size_to_mb "$root_size")
-
-            if [ $(($efi_size_mb + $root_size_mb)) -gt $free_space_size_mb ]; then
-                dialog --msgbox "Not enough free space for the requested partition sizes." 8 60
-                error "Installation aborted."
-            fi
-
-            efi_part_end=$(awk -v efi_size="$efi_size_mb" 'BEGIN {print $1 + efi_size}')
-            root_partition_disk() {
-    info "Partitioning the disk..."
-    devices=()
-    while read -r name size model; do
-        if [[ $name =~ ^(sd|nvme|vd|mmcblk) ]]; then
-            devices+=("/dev/$name" "$size $model")
-        fi
-    done < <(lsblk -d -n -o NAME,SIZE,MODEL)
-
-    if [ ${#devices[@]} -eq 0 ]; then
-        error "No disks found."
-    fi
-
     echo "Available disks:"
     i=0
     for ((i=0; i<${#devices[@]}; i+=2)); do
-        echo "$((i/2+1))) ${devices[i]} (${devices[i+1]})"
+        echo "$((i/2+1))) ${devices[i]} (${devices[i+1]})
     done
     
     read -p "Select a disk for installation (1, 2, ...): " disk_num
@@ -291,37 +215,6 @@ partition_disk() {
     sleep 2
 }
 
-            info "Creating partitions in free space..."
-            parted -s "$disk" mkpart ESP fat32 "${free_space_start}MB" "${efi_part_end}MB"
-            parted -s "$disk" set 1 esp on
-            parted -s "$disk" mkpart primary btrfs "${efi_part_end}MB" "${root_part_end}MB"
-        fi
-    else
-        # No Windows detected, format the entire disk
-        dialog --yesno "This will format the entire disk $disk. All data will be lost. Are you sure?" 8 40
-        if [ $? -ne 0 ]; then
-            error "Installation aborted by user."
-        fi
-
-        info "Wiping all signatures from $disk..."
-        wipefs -a "$disk"
-
-        efi_size=$(dialog --inputbox "Enter the size for the EFI partition (e.g., 2200M):" 8 40 "2200M" --stdout)
-        root_size=$(dialog --inputbox "Enter the size for the ROOT partition (e.g., 30G):" 8 40 "30G" --stdout)
-
-        info "Partitioning $disk..."
-        parted -s "$disk" mklabel gpt
-        parted -s "$disk" mkpart ESP fat32 1MiB "$efi_size"
-        parted -s "$disk" set 1 esp on
-        parted -s "$disk" mkpart primary btrfs "$efi_size" 100%
-    fi
-
-    info "Informing the OS about the new partition table..."
-    partprobe "$disk"
-    blockdev --rereadpt "$disk"
-    sleep 2
-}
-
 
 # --- Installation ---
 install_base_system() {
@@ -379,7 +272,7 @@ install_base_system() {
     mount "$efi_part" /mnt/boot || error "Failed to mount boot partition."
 
     info "Installing base packages..."
-    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup
+    pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs git cryptsetup limine snapper networkmanager bluez-utils efibootmgr limine-snapper-sync limine-mkinitcpio-hook
 
     genfstab -U /mnt >> /mnt/etc/fstab
 }
@@ -392,44 +285,60 @@ configure_system() {
         error "/mnt/bin/bash not found. pacstrap might have failed."
     fi
 
-    info "Configuring mkinitcpio for encryption..."
-    sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
-
-    boot_part_uuid=$(blkid -s PARTUUID -o value "$efi_part")
     root_part_uuid=$(blkid -s PARTUUID -o value "$root_part")
+
+    info "Configuring mkinitcpio for encryption and plymouth..."
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev plymouth autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck btrfs-overlayfs)/' /mnt/etc/mkinitcpio.conf
 
     info "Creating Limine config file..."
     mkdir -p /mnt/boot/EFI/limine
-    echo "TIMEOUT=5" > /mnt/boot/EFI/limine/limine.cfg
-    echo "DEFAULT_ENTRY=1" >> /mnt/boot/EFI/limine/limine.cfg
-    echo ":Arch Linux" >> /mnt/boot/EFI/limine/limine.cfg
-    echo "    PROTOCOL=linux" >> /mnt/boot/EFI/limine/limine.cfg
-    echo "    KERNEL_PATH=uuid($boot_part_uuid):/vmlinuz-linux" >> /mnt/boot/EFI/limine/limine.cfg
-    echo "    INITRD_PATH=uuid($boot_part_uuid):/initramfs-linux.img" >> /mnt/boot/EFI/limine/limine.cfg
-    info "Creating Limine config file..."
-   mkdir -p /mnt/boot/EFI/limine
+    sudo tee /mnt/boot/limine.conf <<EOF >/dev/null
+### Read more at config document: https://github.com/limine-bootloader/limine/blob/trunk/CONFIG.md
+#timeout: 3
+default_entry: 2
+interface_branding: ArchLinux Bootloader
+interface_branding_color: 2
+hash_mismatch_panic: no
 
-cat > /mnt/boot/EFI/limine/limine.cfg <<EOF
-timeout: 5
+term_background: 1a1b26
+backdrop: 1a1b26
 
-/Arch Linux (linux)
-    protocol: linux
-    path: boot():/vmlinuz-linux
-    cmdline: cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs
-    module_path: boot():/initramfs-linux.img
+# Terminal colors (Tokyo Night palette)
+term_palette: 15161e;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;a9b1d6
+term_palette_bright: 414868;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;c0caf5
 
-/Arch Linux (linux-fallback)
-    protocol: linux
-    path: boot():/vmlinuz-linux
-    cmdline: cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs
-    module_path: boot():/initramfs-linux-fallback.img
+# Text colors
+term_foreground: c0caf5
+term_foreground_bright: c0caf5
+term_background_bright: 24283b
+ 
 EOF
-  
-    if $has_ntfs; then
-        echo "" >> /mnt/boot/EFI/limine/limine.cfg
-        echo ":Windows" >> /mnt/boot/EFI/limine/limine.cfg
-        echo "    PROTOCOL=efi" >> /mnt/boot/EFI/limine/limine.cfg
-        echo "    PATH=uuid($boot_part_uuid):/EFI/Microsoft/Boot/bootmgfw.efi" >> /mnt/boot/EFI/limine/limine.cfg
+
+    CMDLINE="cryptdevice=PARTUUID=$root_part_uuid:root root=/dev/mapper/root zswap.enabled=0 rootflags=subvol=@ rw rootfstype=btrfs"
+    sudo tee /mnt/etc/default/limine <<EOF >/dev/null
+TARGET_OS_NAME="ArchLinux"
+
+ESP_PATH="/boot"
+
+KERNEL_CMDLINE[default]="$CMDLINE"
+KERNEL_CMDLINE[default]+="quiet splash"
+
+ENABLE_UKI=yes
+
+ENABLE_LIMINE_FALLBACK=yes
+
+# Find and add other bootloaders
+FIND_BOOTLOADERS=yes
+
+BOOT_ORDER="*, *fallback, Snapshots"
+
+MAX_SNAPSHOT_ENTRIES=5
+
+SNAPSHOT_FORMAT_CHOICE=5
+EOF
+
+    if [[ -z $EFI ]]; then
+        sudo sed -i '/^ENABLE_UKI=/d; /^ENABLE_LIMINE_FALLBACK=/d' /mnt/etc/default/limine
     fi
 
     info "Creating pacman hook for Limine..."
@@ -448,9 +357,6 @@ Exec = /usr/bin/cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 EOF
 
     arch-chroot /mnt /bin/bash -c "
-        # Install additional packages
-        pacman -S --noconfirm limine snapper networkmanager bluez-utils efibootmgr
-
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
         hwclock --systohc
         echo '$language UTF-8' > /etc/locale.gen
@@ -472,8 +378,7 @@ EOF
         mkinitcpio -P
         
         # Configure Limine
-        mkdir -p /boot/EFI/limine
-        cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
+        limine-update
 
         efibootmgr \
             --create \
@@ -485,8 +390,12 @@ EOF
         
         # Configure Snapper
         snapper -c root create-config /
+        snapper -c home create-config /home
         mount -a
         chmod 750 /.snapshots
+        sed -i 's/^TIMELINE_CREATE=\"yes\"/TIMELINE_CREATE=\"no\"/' /etc/snapper/configs/{root,home}
+        sed -i 's/^NUMBER_LIMIT=\"50\"/NUMBER_LIMIT=\"5\"/' /etc/snapper/configs/{root,home}
+        sed -i 's/^NUMBER_LIMIT_IMPORTANT=\"10\"/NUMBER_LIMIT_IMPORTANT=\"5\"/' /etc/snapper/configs/{root,home}
 
         # Install GPU and CPU specific packages
         if lspci | grep -i 'nvidia'; then
@@ -501,6 +410,39 @@ EOF
         systemctl enable bluetooth
         systemctl enable snapper-timeline.timer
         systemctl enable snapper-cleanup.timer
+        systemctl enable limine-snapper-sync.service
+
+        # Add UKI entry to UEFI
+        if efibootmgr &>/dev/null && ! efibootmgr | grep -q ArchLinux &&
+          ! cat /sys/class/dmi/id/bios_vendor 2>/dev/null | grep -qi \"American Megatrends\"; then
+          efibootmgr --create \
+            --disk \"$(findmnt -n -o SOURCE /boot | sed 's/p\?[0-9]*$//')\" \
+            --part \"$(findmnt -n -o SOURCE /boot | grep -o 'p\?[0-9]*$' | sed 's/^p//')\" \
+            --label \"ArchLinux\" \
+            --loader \"\\EFI\\Linux\\\$(cat /etc/machine-id)_linux.efi\"
+        fi
+
+        # Add a helper to create a new snapshot
+        tee /usr/local/bin/new-snapshot <<'EOF' >/dev/null
+#!/bin/bash
+
+# Check if running as root
+if [ \"$EUID\" -ne 0 ]; then
+  echo \"Please run as root\"
+  exit 1
+fi
+
+# Check if a description is provided
+if [ -z \"$1\" ]; then
+  echo \"Usage: $0 <description>\"
+  exit 1
+fi
+
+# Create a new snapshot with the provided description
+snapper -c root create --description \"$1\"
+EOF
+
+        chmod +x /usr/local/bin/new-snapshot
     "
 }
 
@@ -516,8 +458,8 @@ main() {
     end_time=$(date +%s)
     installation_time=$((end_time - start_time))
 
-    dialog --yesno "Installation finished in $installation_time seconds. Do you want to chroot into the new system? (If you say no, the system will reboot)" 10 60
-    if [ $? -eq 0 ]; then
+    read -p "Installation finished in $installation_time seconds. Do you want to chroot into the new system? (If you say no, the system will reboot) (y/N) " chroot_choice
+    if [[ "$chroot_choice" =~ ^[yY]$ ]]; then
         arch-chroot /mnt
     else
         reboot
