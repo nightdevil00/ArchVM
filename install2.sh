@@ -107,7 +107,7 @@ partition_disk() {
     echo "Available disks:"
     i=0
     for ((i=0; i<${#devices[@]}; i+=2)); do
-        echo "$((i/2+1))) ${devices[i]} (${devices[i+1]})
+        echo "$((i/2+1))) ${devices[i]} (${devices[i+1]})"
     done
     
     read -p "Select a disk for installation (1, 2, ...): " disk_num
