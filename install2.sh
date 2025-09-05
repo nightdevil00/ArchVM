@@ -290,10 +290,6 @@ configure_system() {
     info "Configuring mkinitcpio for encryption..."
     sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
 
-    info "Configuring GRUB..."
-    sed -i "s/^GRUB_CMDLINE_LINUX=\"\"/GRUB_CMDLINE_LINUX=\"cryptdevice=PARTUUID=$root_part_uuid:cryptroot quiet splash\"/"
-    sed -i 's/#GRUB_ENABLE_CRYPTODISK/GRUB_ENABLE_CRYPTODISK/' /mnt/etc/default/grub
-
     arch-chroot /mnt /bin/bash -c "
         ln -sf /usr/share/zoneinfo/$timezone /etc/localtime
         hwclock --systohc
@@ -311,6 +307,10 @@ configure_system() {
         useradd -m -G wheel -s /bin/bash $username
         echo '$username:$password' | chpasswd
         echo '%wheel ALL=(ALL:ALL) ALL' >> /etc/sudoers
+
+        info \"Configuring GRUB...\"
+        sed -i \"s/^GRUB_CMDLINE_LINUX=\"\"/GRUB_CMDLINE_LINUX=\"cryptdevice=PARTUUID=$root_part_uuid:cryptroot quiet splash\"/\" /etc/default/grub
+        sed -i 's/#GRUB_ENABLE_CRYPTODISK/GRUB_ENABLE_CRYPTODISK/' /etc/default/grub
 
         info \"Regenerating initramfs...\"
         mkinitcpio -P
