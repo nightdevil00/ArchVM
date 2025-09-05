@@ -355,7 +355,7 @@ fi
 
 # Check if a description is provided
 if [ -z "$1" ]; then
-  echo "Usage: $0 <description>"
+  echo "Usage: $0 \<description\>"
   exit 1
 fi
 
