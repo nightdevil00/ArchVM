@@ -1,5 +1,7 @@
 #!/bin/bash
 
+#Install Arch - Working with GRUB
+#Now to test windows discovery
 # Abort on error
 set -e
 
@@ -172,7 +174,7 @@ mkdir /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # Install the base system (packages will now be installed via pacstrap)
-pacstrap /mnt base linux linux-firmware linux-headers vim nano sudo grub efibootmgr btrfs-progs kitty os-prober
+pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo grub efibootmgr btrfs-progs kitty os-prober
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -181,6 +183,16 @@ genfstab -U /mnt >> /mnt/etc/fstab
 ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
 echo "$ROOT_UUID" > /mnt/root_uuid
 
+# Get user details
+echo "Enter new username: "
+read -r username
+echo "Enter password for user $username: "
+read -rs user_password
+echo
+echo "Set root password"
+read -rs root_password
+echo
+
 # Chroot into new system
 arch-chroot /mnt /bin/bash <<EOF
 
@@ -188,7 +200,7 @@ arch-chroot /mnt /bin/bash <<EOF
 ROOT_UUID=\$(cat /root_uuid)
 
 # Set timezone and locale
-ln -sf /usr/share/zoneinfo/Region/City /etc/localtime
+ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 hwclock --systohc
 echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
@@ -198,18 +210,14 @@ echo "LANG=en_US.UTF-8" > /etc/locale.conf
 echo "arch-linux" > /etc/hostname
 
 # Set root password
-echo "Set root password"
-passwd
+echo "root:$root_password" | chpasswd
 
 # Create a new user
-echo "Enter new username: "
-read -r username
-useradd -m -G wheel "\$username"
-echo "Enter password for user \$username: "
-passwd "\$username"
+useradd -m -G wheel "$username"
+echo "$username:$user_password" | chpasswd
 
 # Add user to sudoers file
-echo "\$username ALL=(ALL) ALL" >> /etc/sudoers
+echo "$username ALL=(ALL) ALL" >> /etc/sudoers
 
 # Configure crypttab
 echo "cryptroot UUID=\$ROOT_UUID none luks,discard" > /etc/crypttab
@@ -220,13 +228,11 @@ sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystem
 # Regenerate initramfs
 mkinitcpio -P
 
+# Configure GRUB for encryption
+sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"/&cryptdevice=UUID=$ROOT_UUID:cryptroot root=\/dev\/mapper\/cryptroot /" /etc/default/grub
+
 # Install GRUB and configure bootloader
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
-
-# Add Windows to GRUB if detected
-echo "Adding Windows to GRUB bootloader..."
-os-prober
 grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable necessary services
