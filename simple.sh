@@ -1,246 +1,299 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# safer-arch-install.sh
+# Improved disk listing and Windows detection; safer partitioning when Windows is present.
+set -euo pipefail
 
-# Abort on error
-set -e
-
-# Ensure we're running as root
+# check root
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
+  echo "This script must be run as root"
+  exit 1
 fi
 
-# List all available disks and assign numbers to them
-echo "Available disks on this system:"
+TMP_MOUNT="/mnt/__arch_install_tmp"
+mkdir -p "$TMP_MOUNT"
+declare -A PROTECTED_PARTS=()  # map of partition -> reason
 
-# Use lsblk to list disks with their size and model
-disks=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $1}'))
-disk_models=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $3}'))
-disk_sizes=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $2}'))
+# Helper: print a parseable lsblk and return array of disks (TYPE=disk)
+declare -a DEVICES=()
+declare -A DEV_MODEL DEV_SIZE DEV_TRAN DEV_MOUNT
 
-# Display the disks with numbers
-counter=1
-for i in "${!disks[@]}"; do
-    echo "$counter. ${disk_models[$i]} ${disk_sizes[$i]}"
-    counter=$((counter + 1))
+while IFS= read -r line; do
+  # lsblk -P fields are KEY="VALUE"
+  eval "$line"   # populates variables like NAME, KNAME, SIZE, MODEL, TRAN, MOUNTPOINT, TYPE
+  if [[ "${TYPE:-}" == "disk" ]]; then
+    devpath="/dev/${NAME}"
+    DEVICES+=("$devpath")
+    DEV_MODEL["$devpath"]="${MODEL:-unknown}"
+    DEV_SIZE["$devpath"]="${SIZE:-unknown}"
+    DEV_TRAN["$devpath"]="${TRAN:-unknown}"
+    DEV_MOUNT["$devpath"]="${MOUNTPOINT:-}"
+  fi
+done < <(lsblk -P -o NAME,KNAME,TYPE,SIZE,MODEL,TRAN,MOUNTPOINT)
+
+if [ ${#DEVICES[@]} -eq 0 ]; then
+  echo "No block devices found. Exiting."
+  exit 1
+fi
+
+echo "Available physical disks:"
+for i in "${!DEVICES[@]}"; do
+  idx=$((i+1))
+  d=${DEVICES[$i]}
+  printf "%2d) %-12s  %8s  %-10s  transport=%s\n" \
+    "$idx" "$d" "${DEV_SIZE[$d]}" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}"
 done
 
-# Ask the user to select the disk by number
-echo "Enter the number of the disk for Arch installation (e.g., 1, 2, etc.):"
-read -r disk_number
-
-# Validate the selection
-if ! [[ "$disk_number" =~ ^[0-9]+$ ]] || [ "$disk_number" -le 0 ] || [ "$disk_number" -gt "${#disks[@]}" ]; then
-    echo "Invalid selection. Exiting."
-    exit 1
+read -rp $'Enter the number of the disk for Arch installation (e.g., 1): ' disk_number
+if ! [[ "$disk_number" =~ ^[0-9]+$ ]] || (( disk_number < 1 || disk_number > ${#DEVICES[@]} )); then
+  echo "Invalid selection. Exiting."
+  exit 1
 fi
 
-# Get the selected disk name
-selected_disk="${disks[$disk_number-1]}"
+TARGET_DISK="${DEVICES[$((disk_number-1))]}"
+echo "You selected: $TARGET_DISK"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
 
-# Verify the selected disk exists
-if [[ ! -b "/dev/$selected_disk" ]]; then
-    echo "Error: Disk /dev/$selected_disk not found. Exiting."
+# --- Windows detection ---
+echo
+echo "Scanning all partitions on all disks for Windows boot files / EFI Microsoft..."
+
+
+# Iterate partitions across all disks (not just selected) to identify Windows systems
+while IFS= read -r line; do
+  eval "$line"   # this yields NAME,TYPE,FSTYPE,MOUNTPOINT etc.
+  if [[ "${TYPE:-}" != "part" ]]; then
+    continue
+  fi
+  PART="/dev/${NAME}"
+  # skip loop devices, zram, etc
+  if [[ "$PART" =~ loop|sr|md ]]; then
+    continue
+  fi
+
+  # Find filesystem type via blkid (non-interactive)
+  FSTYPE=$(blkid -s TYPE -o value "$PART" 2>/dev/null || true)
+
+  # If VFAT/Efi, mount ro and look for EFI/Microsoft
+  if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" || "$FSTYPE" == "fat" ]]; then
+    mkdir -p "$TMP_MOUNT"
+    if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
+      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
+        PROTECTED_PARTS["$PART"]="EFI Microsoft files found"
+        echo "Protected (EFI): $PART -> ${PROTECTED_PARTS[$PART]}"
+      fi
+      umount "$TMP_MOUNT" || true
+    fi
+  fi
+
+  # If NTFS, mount ro and look for Windows folder or boot files
+  if [[ "$FSTYPE" == "ntfs" ]]; then
+    mkdir -p "$TMP_MOUNT"
+    if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
+      if [[ -d "$TMP_MOUNT/Windows" ]] || [[ -f "$TMP_MOUNT/bootmgr" ]] || [[ -d "$TMP_MOUNT/Boot" ]]; then
+        PROTECTED_PARTS["$PART"]="NTFS Windows files found"
+        echo "Protected (NTFS): $PART -> ${PROTECTED_PARTS[$PART]}"
+      fi
+      umount "$TMP_MOUNT" || true
+    fi
+  fi
+
+done < <(lsblk -P -o NAME,TYPE,FSTYPE,MOUNTPOINT)
+
+# Summarize
+if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
+  echo
+  echo "Detected Windows/EFI partitions; they will not be touched."
+  echo "Scanning for largest free space on $TARGET_DISK..."
+
+  # get free-space blocks: output format "start:end:size:type"
+  # we'll parse for entries where type == "free"
+  largest_start=""
+  largest_end=""
+  largest_size=0
+
+  while IFS=: read -r num start end size type rest; do
+    if [[ "$type" == "free" ]]; then
+      # remove GB/MB suffix for math
+      s_val=$(echo "$size" | sed 's/[^0-9.]//g')
+      unit=$(echo "$size" | grep -o '[A-Za-z]*')
+      # normalize to GB
+      if [[ "$unit" =~ [Mm]B ]]; then
+        s_val=$(awk -v v="$s_val" 'BEGIN{print v/1024}')
+      fi
+      if (( $(echo "$s_val > $largest_size" | bc -l) )); then
+        largest_size=$s_val
+        largest_start=$start
+        largest_end=$end
+      fi
+    fi
+  done < <(parted -m "$TARGET_DISK" unit GB print free | tail -n +3)
+
+  if [[ -z "$largest_start" ]]; then
+    echo "No free space detected. Exiting."
     exit 1
-fi
+  fi
 
-# Display the selected disk information
-echo "You selected: /dev/$selected_disk"
-lsblk -o NAME,SIZE,MODEL,MOUNTPOINT "/dev/$selected_disk"
+  echo "Largest free region found: $largest_start → $largest_end ($largest_size GB)"
+  echo "Creating 2GB EFI partition at start of that region and using the rest for root."
 
-# Scan the selected disk for existing Windows partitions (EFI and NTFS)
-echo "Scanning /dev/$selected_disk for Windows partitions..."
-windows_partition=""
-windows_efi_partition=""
+  # convert to numeric for parted math
+  start_gb=$(echo "$largest_start" | sed 's/GB//')
+  end_gb=$(echo "$largest_end" | sed 's/GB//')
+  efi_start="${start_gb}GB"
+  efi_end="$(awk -v s="$start_gb" 'BEGIN{print s+2}')GB"
+  root_start="$efi_end"
+  root_end="${end_gb}GB"
 
-# Search for Windows partitions (NTFS and EFI)
-for part in $(lsblk -o NAME,FSTYPE,MOUNTPOINT "/dev/$selected_disk" | grep -E "ntfs|vfat" | awk '{print $1}'); do
-    fs_type=$(lsblk -f /dev/$part | awk 'NR==2 {print $2}')
-    
-    if [[ "$fs_type" == "ntfs" ]]; then
-        windows_partition="/dev/$part"
-        echo "Windows NTFS partition found: $windows_partition"
-    elif [[ "$fs_type" == "vfat" ]]; then
-        windows_efi_partition="/dev/$part"
-        echo "Windows EFI partition found: $windows_efi_partition"
-    fi
-done
+  parted --script "$TARGET_DISK" mkpart primary fat32 "$efi_start" "$efi_end"
+  parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on || true
+  parted --script "$TARGET_DISK" mkpart primary btrfs "$root_start" "$root_end"
 
-# If no Windows partitions are found, ask if user wants to install on the full disk
-if [[ -z "$windows_partition" || -z "$windows_efi_partition" ]]; then
-    echo "No Windows partitions (NTFS and EFI) found on /dev/$selected_disk."
-    echo "Would you like to install Arch on the full disk and erase all existing data? (y/n):"
-    read -r choice
-    if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
-        echo "Exiting installation."
-        exit 1
-    fi
+  partprobe "$TARGET_DISK" || true
+  sleep 1
 
-    echo "Proceeding with full disk installation."
-    # Create new GPT partition table and partitions for Arch
-    (
-        echo "g"  # Create new GPT partition table
-        echo "n"  # New partition for Arch EFI
-        echo ""   # Default partition number
-        echo ""   # Default first sector
-        echo "+2G"  # Size of the Arch EFI partition (2GB)
-        echo "n"  # New partition for Arch root
-        echo ""   # Default partition number
-        echo ""   # Default first sector
-        echo ""   # Use remaining space for root partition
-        echo "w"  # Write partition table
-    ) | fdisk "/dev/$selected_disk"
+  parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
+  efi_partition="${parts[-2]}"
+  root_partition="${parts[-1]}"
 
-    # Inform user of partition changes
-    lsblk -f
-
-    # Assign the partitions
-    efi_partition="/dev/${selected_disk}1"  # Adjust as needed
-    root_partition="/dev/${selected_disk}2"  # Adjust as needed
+  echo "Created EFI partition:  $efi_partition  (${efi_start}–${efi_end})"
+  echo "Created root partition: $root_partition (${root_start}–${root_end})"
 
 else
-    # If Windows partitions are found, proceed with dual-boot setup
-    # Confirm with user that Windows partitions will not be touched
-    echo "Windows NTFS partition: $windows_partition"
-    echo "Windows EFI partition: $windows_efi_partition"
-    echo "These partitions will NOT be touched by the Arch installation script."
+  # No Windows detected: confirm full disk wipe
+  echo "No Windows partitions detected on any disk."
+  read -rp "Proceed to wipe and use the entire $TARGET_DISK for Arch? (yes/no): " yn
+  if [[ "$yn" != "yes" ]]; then
+    echo "Aborting."
+    exit 0
+  fi
 
-    # List available free space to partition
-    echo "Checking available free space on /dev/$selected_disk..."
-    free_space=$(lsblk -o NAME,SIZE | grep "$selected_disk" | grep -E "free" | awk '{print $2}')
-    echo "Free space available: $free_space"
+  echo "Creating new GPT and partitions (EFI + root) on $TARGET_DISK"
+  parted --script "$TARGET_DISK" mklabel gpt
+  # create 2GB EFI
+  parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
+  parted --script "$TARGET_DISK" set 1 boot on
+  # rest as root
+  parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
+  partprobe "$TARGET_DISK" || true
 
-    # Ask user to select the free space for creating Arch partitions
-    echo "Enter the size for the new Arch EFI partition (e.g., 2GB):"
-    read -r efi_size
-    echo "Enter the size for the Arch root partition (e.g., 30GB):"
-    read -r root_size
-
-    # Partitioning the disk
-    echo "Creating partitions..."
-    (
-        echo "g"  # Create new GPT partition table
-        echo "n"  # New partition for Arch EFI
-        echo ""   # Default partition number
-        echo ""   # Default first sector
-        echo "+${efi_size}"  # Size of the Arch EFI partition (e.g., 2GB)
-        echo "n"  # New partition for Arch root
-        echo ""   # Default partition number
-        echo ""   # Default first sector
-        echo "+${root_size}"  # Size of the root partition (e.g., 30GB)
-        echo "w"  # Write partition table
-    ) | fdisk "/dev/$selected_disk"
-
-    # Inform user of partition changes
-    lsblk -f
-
-    # Find the newly created partitions for EFI and root
-    efi_partition="/dev/${selected_disk}1"  # Adjust as needed
-    root_partition="/dev/${selected_disk}2"  # Adjust as needed
+  # find created partitions
+  parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
+  efi_partition="${parts[0]}"
+  root_partition="${parts[1]}"
+  echo "EFI partition: $efi_partition"
+  echo "Root partition: $root_partition"
 fi
 
-# Ensure the EFI partition is formatted as FAT32
+# Final safety check: ensure EFI and root variables exist
+if [[ -z "${efi_partition:-}" || -z "${root_partition:-}" ]]; then
+  echo "Couldn't determine new partition paths automatically. Listing partitions for manual verification:"
+  lsblk -o NAME,KNAME,SIZE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
+  echo "Please re-run the script after confirming partition names."
+  exit 1
+fi
+
+# Format EFI partition
 echo "Formatting EFI partition ($efi_partition) as FAT32..."
 mkfs.fat -F32 "$efi_partition"
 
-# Encrypt the root partition with LUKS2
-echo "Encrypting root partition ($root_partition)..."
-echo -n "Enter password for LUKS encryption (for both root and home partitions): "
-read -rs LUKS_PASSWORD
-echo
-
-# Make sure the partition exists and format it
+# Ask for LUKS passphrase (interactively) then format root and open
+echo "Encrypting root partition ($root_partition) with LUKS2."
+echo "You will be prompted interactively by cryptsetup."
 cryptsetup luksFormat "$root_partition"
 cryptsetup luksOpen "$root_partition" cryptroot
 
-# Create filesystem on the encrypted partition
-echo "Creating Btrfs filesystem on root partition..."
-mkfs.btrfs /dev/mapper/cryptroot
+# create btrfs
+echo "Creating btrfs on /dev/mapper/cryptroot..."
+mkfs.btrfs -f /dev/mapper/cryptroot
 
-# Mount root filesystem and create subvolumes
+# mount and create subvolumes
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 umount /mnt
 
-# Mount root subvolume
 mount -o subvol=@ /dev/mapper/cryptroot /mnt
-mkdir /mnt/home
+mkdir -p /mnt/home
 mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
 
-# Mount EFI partition for Arch (2GB EFI partition)
-mkdir /mnt/boot
+# mount efi
+mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
-# Install the base system (packages will now be installed via pacstrap)
-pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo grub efibootmgr btrfs-progs kitty os-prober
+# pacstrap
+pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo grub efibootmgr btrfs-progs os-prober
 
-# Generate fstab
+# genfstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Get UUID of the encrypted partition
-ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
-echo "$ROOT_UUID" > /mnt/root_uuid
+# Save root partition path for chroot
+echo "$root_partition" > /mnt/ROOT_PART_PATH
 
-# Get user details
-echo "Enter new username: "
-read -r username
-echo "Enter password for user $username: "
-read -rs user_password
-echo
-echo "Set root password"
-read -rs root_password
-echo
+# user input for username/password
+read -rp "New username: " username
+read -rsp "Password for $username: " user_password; echo
+read -rsp "Root password: " root_password; echo
 
-# Chroot into new system
-arch-chroot /mnt /bin/bash <<EOF
+cat > /mnt/arch_install_vars.sh <<EOF
+ROOT_PART="$root_partition"
+USERNAME="$username"
+USER_PASS="$user_password"
+ROOT_PASS="$root_password"
+EOF
 
-# Read ROOT_UUID from file
-ROOT_UUID=\$(cat /root_uuid)
+# chroot and finish configuration
+arch-chroot /mnt /bin/bash <<'EOF'
+set -euo pipefail
+# Load variables created earlier
+source /arch_install_vars.sh
 
-# Set timezone and locale
+# find UUID of root partition (the underlying encrypted partition)
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+
+# timezone / locale
 ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 hwclock --systohc
 echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# Set hostname
+# hostname
 echo "arch-linux" > /etc/hostname
 
-# Set root password
-echo "root:$root_password" | chpasswd
+# set root password
+echo "root:$ROOT_PASS" | chpasswd
 
-# Create a new user
-useradd -m -G wheel "$username"
-echo "$username:$user_password" | chpasswd
+# create user
+useradd -m -G wheel "$USERNAME"
+echo "$USERNAME:$USER_PASS" | chpasswd
+echo "$USERNAME ALL=(ALL) ALL" >> /etc/sudoers
 
-# Add user to sudoers file
-echo "$username ALL=(ALL) ALL" >> /etc/sudoers
+# crypttab
+echo "cryptroot UUID=$ROOT_UUID none luks,discard" > /etc/crypttab
 
-# Configure crypttab
-echo "cryptroot UUID=\$ROOT_UUID none luks,discard" > /etc/crypttab
-
-# Configure mkinitcpio for LUKS and btrfs
+# mkinitcpio hooks
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
-
-# Regenerate initramfs
 mkinitcpio -P
 
-# Configure GRUB for encryption
-sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"/&cryptdevice=UUID=$ROOT_UUID:cryptroot root=\/dev\/mapper\/cryptroot /" /etc/default/grub
+# grub config - append cryptdevice param to default if present
+if grep -q "^GRUB_CMDLINE_LINUX_DEFAULT" /etc/default/grub; then
+  sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot\"|" /etc/default/grub
+else
+  echo "GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot\"" >> /etc/default/grub
+fi
 
-# Install GRUB and configure bootloader
+# install grub to EFI
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Enable necessary services
-#systemctl enable NetworkManager
+# enable NetworkManager (optional)
+systemctl enable NetworkManager
 
-# Remove temporary file
-rm /root_uuid
-
+# cleanup
+rm -f /arch_install_vars.sh
 EOF
 
-# Final Instructions
-echo "Arch Linux installation complete. You should now reboot. Ensure your UEFI settings are correct for dual-booting."
-echo "Windows should appear in the GRUB bootloader if it's installed."
+echo
+echo "Install steps finished. Review output above for any errors."
+echo "Reboot when ready. If Windows exists it was protected and should appear in GRUB if os-prober detected it."
+

@@ -56,7 +56,7 @@ cp "/home/mihai/simple.sh" "./profile/airootfs/root/${SCRIPT_NAME}"
 chmod +x "./profile/airootfs/root/${SCRIPT_NAME}"
 echo "-> Script copied and made executable."
 
-cp "/home/mihai/simple.sh" "./profile/airootfs/root/${RESCUE_SCRIPT}"
+cp "/home/mihai/archrescue.sh" "./profile/airootfs/root/${RESCUE_SCRIPT}"
 chmod +x "./profile/airootfs/root/${RESCUE_SCRIPT}"
 echo "-> Script copied and made executable."
 
