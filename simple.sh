@@ -9,27 +9,44 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# List all available disks and partitions
+# List all available disks and assign numbers to them
 echo "Available disks on this system:"
-lsblk -d -o NAME,SIZE,MODEL
+disks=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $1,$2,$3}'))
+counter=1
 
-# Prompt the user to select a disk for Arch installation
-echo "Enter the disk for Arch installation (e.g., /dev/sda):"
-read -r disk
+# Display the disks with numbers
+for disk in "${disks[@]}"; do
+    disk_name=$(echo $disk | awk '{print $1}')
+    disk_size=$(echo $disk | awk '{print $2}')
+    disk_model=$(echo $disk | awk '{print $3}')
+    echo "$counter. $disk_model $disk_size"
+    counter=$((counter + 1))
+done
+
+# Ask the user to select the disk by number
+echo "Enter the number of the disk for Arch installation (e.g., 1, 2, etc.):"
+read -r disk_number
+
+# Get the selected disk name
+selected_disk=$(echo ${disks[$disk_number-1]} | awk '{print $1}')
 
 # Verify the selected disk exists
-if [[ ! -b "$disk" ]]; then
-    echo "Error: Disk $disk not found. Exiting."
+if [[ ! -b "/dev/$selected_disk" ]]; then
+    echo "Error: Disk /dev/$selected_disk not found. Exiting."
     exit 1
 fi
 
+# Display the selected disk information
+echo "You selected: /dev/$selected_disk"
+lsblk -o NAME,SIZE,MODEL,MOUNTPOINT /dev/$selected_disk
+
 # Scan the selected disk for existing Windows partitions (EFI and NTFS)
-echo "Scanning $disk for Windows partitions..."
+echo "Scanning /dev/$selected_disk for Windows partitions..."
 windows_partition=""
 windows_efi_partition=""
 
 # Search for Windows partitions (NTFS and EFI)
-for part in $(lsblk -o NAME,FSTYPE,MOUNTPOINT "$disk" | grep -E "ntfs|vfat" | awk '{print $1}'); do
+for part in $(lsblk -o NAME,FSTYPE,MOUNTPOINT "/dev/$selected_disk" | grep -E "ntfs|vfat" | awk '{print $1}'); do
     fs_type=$(lsblk -f /dev/$part | awk 'NR==2 {print $2}')
     
     if [[ "$fs_type" == "ntfs" ]]; then
@@ -43,7 +60,7 @@ done
 
 # If no Windows partitions are found, ask if user wants to install on the full disk
 if [[ -z "$windows_partition" || -z "$windows_efi_partition" ]]; then
-    echo "No Windows partitions (NTFS and EFI) found on $disk."
+    echo "No Windows partitions (NTFS and EFI) found on /dev/$selected_disk."
     echo "Would you like to install Arch on the full disk and erase all existing data? (y/n):"
     read -r choice
     if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
@@ -64,14 +81,14 @@ if [[ -z "$windows_partition" || -z "$windows_efi_partition" ]]; then
         echo ""   # Default first sector
         echo ""   # Use remaining space for root partition
         echo "w"  # Write partition table
-    ) | fdisk "$disk"
+    ) | fdisk "/dev/$selected_disk"
 
     # Inform user of partition changes
     lsblk -f
 
     # Assign the partitions
-    efi_partition="${disk}1"  # Adjust as needed
-    root_partition="${disk}2"  # Adjust as needed
+    efi_partition="/dev/${selected_disk}1"  # Adjust as needed
+    root_partition="/dev/${selected_disk}2"  # Adjust as needed
 
 else
     # If Windows partitions are found, proceed with dual-boot setup
@@ -81,8 +98,8 @@ else
     echo "These partitions will NOT be touched by the Arch installation script."
 
     # List available free space to partition
-    echo "Checking available free space on $disk..."
-    free_space=$(lsblk -o NAME,SIZE | grep "$disk" | grep -E "free" | awk '{print $2}')
+    echo "Checking available free space on /dev/$selected_disk..."
+    free_space=$(lsblk -o NAME,SIZE | grep "$selected_disk" | grep -E "free" | awk '{print $2}')
     echo "Free space available: $free_space"
 
     # Ask user to select the free space for creating Arch partitions
@@ -104,15 +121,19 @@ else
         echo ""   # Default first sector
         echo "+${root_size}"  # Size of the root partition (e.g., 30GB)
         echo "w"  # Write partition table
-    ) | fdisk "$disk"
+    ) | fdisk "/dev/$selected_disk"
 
     # Inform user of partition changes
     lsblk -f
 
     # Find the newly created partitions for EFI and root
-    efi_partition="${disk}1"  # Adjust as needed
-    root_partition="${disk}2"  # Adjust as needed
+    efi_partition="/dev/${selected_disk}1"  # Adjust as needed
+    root_partition="/dev/${selected_disk}2"  # Adjust as needed
 fi
+
+# Ensure the EFI partition is formatted as FAT32
+echo "Formatting EFI partition ($efi_partition) as FAT32..."
+mkfs.fat -F32 "$efi_partition"
 
 # Encrypt the root partition with LUKS2
 echo "Encrypting root partition..."
@@ -196,4 +217,3 @@ EOF
 # Final Instructions
 echo "Arch Linux installation complete. You should now reboot. Ensure your UEFI settings are correct for dual-booting."
 echo "Windows should appear in the GRUB bootloader if it's installed."
-
