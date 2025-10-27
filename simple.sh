@@ -143,15 +143,16 @@ echo "Formatting EFI partition ($efi_partition) as FAT32..."
 mkfs.fat -F32 "$efi_partition"
 
 # Encrypt the root partition with LUKS2
-echo "Encrypting root partition..."
+echo "Encrypting root partition ($root_partition)..."
 echo -n "Enter password for LUKS encryption (for both root and home partitions): "
 read -rs LUKS_PASSWORD
 echo
 
-cryptsetup luksFormat "$root_partition"  # Root partition
+# Make sure the partition exists and format it
+cryptsetup luksFormat "$root_partition"
 cryptsetup luksOpen "$root_partition" cryptroot
 
-# Create filesystems
+# Create filesystem on the encrypted partition
 echo "Creating Btrfs filesystem on root partition..."
 mkfs.btrfs /dev/mapper/cryptroot
 
