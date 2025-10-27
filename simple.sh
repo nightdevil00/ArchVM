@@ -172,13 +172,20 @@ mkdir /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # Install the base system (packages will now be installed via pacstrap)
-pacstrap /mnt base linux linux-firmware linux-headers vim nano sudo grub efibootmgr btrfs-progs kitty
+pacstrap /mnt base linux linux-firmware linux-headers vim nano sudo grub efibootmgr btrfs-progs kitty os-prober
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
+# Get UUID of the encrypted partition
+ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
+echo "$ROOT_UUID" > /mnt/root_uuid
+
 # Chroot into new system
-arch-chroot /mnt /bin/bash <<'EOF'
+arch-chroot /mnt /bin/bash <<EOF
+
+# Read ROOT_UUID from file
+ROOT_UUID=\$(cat /root_uuid)
 
 # Set timezone and locale
 ln -sf /usr/share/zoneinfo/Region/City /etc/localtime
@@ -197,12 +204,21 @@ passwd
 # Create a new user
 echo "Enter new username: "
 read -r username
-useradd -m -G wheel "$username"
-echo "Enter password for user $username: "
-passwd "$username"
+useradd -m -G wheel "\$username"
+echo "Enter password for user \$username: "
+passwd "\$username"
 
 # Add user to sudoers file
-echo "$username ALL=(ALL) ALL" >> /etc/sudoers
+echo "\$username ALL=(ALL) ALL" >> /etc/sudoers
+
+# Configure crypttab
+echo "cryptroot UUID=\$ROOT_UUID none luks,discard" > /etc/crypttab
+
+# Configure mkinitcpio for LUKS and btrfs
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
+
+# Regenerate initramfs
+mkinitcpio -P
 
 # Install GRUB and configure bootloader
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
@@ -216,10 +232,9 @@ grub-mkconfig -o /boot/grub/grub.cfg
 # Enable necessary services
 #systemctl enable NetworkManager
 
-# Set up LUKS password for unlocking at boot
-echo -n "$LUKS_PASSWORD" > /etc/crypttab
+# Remove temporary file
+rm /root_uuid
 
-# Exit chroot
 EOF
 
 # Final Instructions
