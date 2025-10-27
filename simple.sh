@@ -9,27 +9,6 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# Install necessary dependencies
-pacman -Syu --noconfirm
-pacman -S --noconfirm \
-    btrfs-progs \
-    cryptsetup \
-    grub \
-    efibootmgr \
-    linux \
-    linux-firmware \
-    linux-headers \
-    nvidia-open-dkms \
-    gedit \
-    nano \
-    sudo \
-    vim \
-    kitty \
-    base-devel
-
-# Variables
-LUKS_PASSWORD=""
-
 # List all available disks and partitions
 echo "Available disks on this system:"
 lsblk -d -o NAME,SIZE,MODEL
@@ -62,49 +41,78 @@ for part in $(lsblk -o NAME,FSTYPE,MOUNTPOINT "$disk" | grep -E "ntfs|vfat" | aw
     fi
 done
 
-# Ensure Windows partitions were found
+# If no Windows partitions are found, ask if user wants to install on the full disk
 if [[ -z "$windows_partition" || -z "$windows_efi_partition" ]]; then
-    echo "Error: Could not find both Windows NTFS and EFI partitions on $disk."
-    exit 1
+    echo "No Windows partitions (NTFS and EFI) found on $disk."
+    echo "Would you like to install Arch on the full disk and erase all existing data? (y/n):"
+    read -r choice
+    if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
+        echo "Exiting installation."
+        exit 1
+    fi
+
+    echo "Proceeding with full disk installation."
+    # Create new GPT partition table and partitions for Arch
+    (
+        echo "g"  # Create new GPT partition table
+        echo "n"  # New partition for Arch EFI
+        echo ""   # Default partition number
+        echo ""   # Default first sector
+        echo "+2G"  # Size of the Arch EFI partition (2GB)
+        echo "n"  # New partition for Arch root
+        echo ""   # Default partition number
+        echo ""   # Default first sector
+        echo ""   # Use remaining space for root partition
+        echo "w"  # Write partition table
+    ) | fdisk "$disk"
+
+    # Inform user of partition changes
+    lsblk -f
+
+    # Assign the partitions
+    efi_partition="${disk}1"  # Adjust as needed
+    root_partition="${disk}2"  # Adjust as needed
+
+else
+    # If Windows partitions are found, proceed with dual-boot setup
+    # Confirm with user that Windows partitions will not be touched
+    echo "Windows NTFS partition: $windows_partition"
+    echo "Windows EFI partition: $windows_efi_partition"
+    echo "These partitions will NOT be touched by the Arch installation script."
+
+    # List available free space to partition
+    echo "Checking available free space on $disk..."
+    free_space=$(lsblk -o NAME,SIZE | grep "$disk" | grep -E "free" | awk '{print $2}')
+    echo "Free space available: $free_space"
+
+    # Ask user to select the free space for creating Arch partitions
+    echo "Enter the size for the new Arch EFI partition (e.g., 2GB):"
+    read -r efi_size
+    echo "Enter the size for the Arch root partition (e.g., 30GB):"
+    read -r root_size
+
+    # Partitioning the disk
+    echo "Creating partitions..."
+    (
+        echo "g"  # Create new GPT partition table
+        echo "n"  # New partition for Arch EFI
+        echo ""   # Default partition number
+        echo ""   # Default first sector
+        echo "+${efi_size}"  # Size of the Arch EFI partition (e.g., 2GB)
+        echo "n"  # New partition for Arch root
+        echo ""   # Default partition number
+        echo ""   # Default first sector
+        echo "+${root_size}"  # Size of the root partition (e.g., 30GB)
+        echo "w"  # Write partition table
+    ) | fdisk "$disk"
+
+    # Inform user of partition changes
+    lsblk -f
+
+    # Find the newly created partitions for EFI and root
+    efi_partition="${disk}1"  # Adjust as needed
+    root_partition="${disk}2"  # Adjust as needed
 fi
-
-# Confirm with user that Windows partitions will not be touched
-echo "Windows NTFS partition: $windows_partition"
-echo "Windows EFI partition: $windows_efi_partition"
-echo "These partitions will NOT be touched by the Arch installation script."
-
-# List available free space to partition
-echo "Checking available free space on $disk..."
-free_space=$(lsblk -o NAME,SIZE | grep "$disk" | grep -E "free" | awk '{print $2}')
-echo "Free space available: $free_space"
-
-# Ask user to select the free space for creating Arch partitions
-echo "Enter the size for the new Arch EFI partition (e.g., 2GB):"
-read -r efi_size
-echo "Enter the size for the Arch root partition (e.g., 30GB):"
-read -r root_size
-
-# Partitioning the disk
-echo "Creating partitions..."
-(
-  echo "g"  # Create new GPT partition table
-  echo "n"  # New partition for Arch EFI
-  echo ""   # Default partition number
-  echo ""   # Default first sector
-  echo "+${efi_size}"  # Size of the Arch EFI partition (e.g., 2GB)
-  echo "n"  # New partition for Arch root
-  echo ""   # Default partition number
-  echo ""   # Default first sector
-  echo "+${root_size}"  # Size of the root partition (e.g., 30GB)
-  echo "w"  # Write partition table
-) | fdisk "$disk"
-
-# Inform user of partition changes
-lsblk -f
-
-# Find the newly created partitions for EFI and root
-efi_partition="${disk}1"  # Adjust as needed
-root_partition="${disk}2"  # Adjust as needed
 
 # Encrypt the root partition with LUKS2
 echo "Encrypting root partition..."
@@ -134,8 +142,8 @@ mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
 mkdir /mnt/boot
 mount "$efi_partition" /mnt/boot
 
-# Install the base system
-pacstrap /mnt base linux linux-firmware linux-headers nvidia-open-dkms vim nano sudo grub efibootmgr btrfs-progs
+# Install the base system (packages will now be installed via pacstrap)
+pacstrap /mnt base linux linux-firmware linux-headers nvidia-open-dkms vim nano sudo grub efibootmgr btrfs-progs kitty
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
