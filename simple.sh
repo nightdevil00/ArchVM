@@ -1,7 +1,5 @@
 #!/bin/bash
 
-#Install Arch - Working with GRUB
-#Now to test windows discovery
 # Abort on error
 set -e
 
