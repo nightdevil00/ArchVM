@@ -172,7 +172,7 @@ mkdir /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # Install the base system (packages will now be installed via pacstrap)
-pacstrap /mnt base linux linux-firmware linux-headers nvidia-open-dkms vim nano sudo grub efibootmgr btrfs-progs kitty
+pacstrap /mnt base linux linux-firmware linux-headers vim nano sudo grub efibootmgr btrfs-progs kitty
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -214,7 +214,7 @@ os-prober
 grub-mkconfig -o /boot/grub/grub.cfg
 
 # Enable necessary services
-systemctl enable NetworkManager
+#systemctl enable NetworkManager
 
 # Set up LUKS password for unlocking at boot
 echo -n "$LUKS_PASSWORD" > /etc/crypttab
