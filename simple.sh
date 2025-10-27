@@ -11,15 +11,16 @@ fi
 
 # List all available disks and assign numbers to them
 echo "Available disks on this system:"
-disks=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $1,$2,$3}'))
-counter=1
+
+# Use lsblk to list disks with their size and model
+disks=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $1}'))
+disk_models=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $3}'))
+disk_sizes=($(lsblk -d -o NAME,SIZE,MODEL | grep -E '^\S' | awk '{print $2}'))
 
 # Display the disks with numbers
-for disk in "${disks[@]}"; do
-    disk_name=$(echo $disk | awk '{print $1}')
-    disk_size=$(echo $disk | awk '{print $2}')
-    disk_model=$(echo $disk | awk '{print $3}')
-    echo "$counter. $disk_model $disk_size"
+counter=1
+for i in "${!disks[@]}"; do
+    echo "$counter. ${disk_models[$i]} ${disk_sizes[$i]}"
     counter=$((counter + 1))
 done
 
@@ -27,8 +28,14 @@ done
 echo "Enter the number of the disk for Arch installation (e.g., 1, 2, etc.):"
 read -r disk_number
 
+# Validate the selection
+if ! [[ "$disk_number" =~ ^[0-9]+$ ]] || [ "$disk_number" -le 0 ] || [ "$disk_number" -gt "${#disks[@]}" ]; then
+    echo "Invalid selection. Exiting."
+    exit 1
+fi
+
 # Get the selected disk name
-selected_disk=$(echo ${disks[$disk_number-1]} | awk '{print $1}')
+selected_disk="${disks[$disk_number-1]}"
 
 # Verify the selected disk exists
 if [[ ! -b "/dev/$selected_disk" ]]; then
@@ -38,7 +45,7 @@ fi
 
 # Display the selected disk information
 echo "You selected: /dev/$selected_disk"
-lsblk -o NAME,SIZE,MODEL,MOUNTPOINT /dev/$selected_disk
+lsblk -o NAME,SIZE,MODEL,MOUNTPOINT "/dev/$selected_disk"
 
 # Scan the selected disk for existing Windows partitions (EFI and NTFS)
 echo "Scanning /dev/$selected_disk for Windows partitions..."
