@@ -7,7 +7,7 @@
 # The author is NOT responsible for any damage, data loss, or system issues
 # that may result from using or modifying this script. Use at your own risk.
 # Always review and understand the script before running it, especially on
-# production or sensitive systems.v4
+# production or sensitive systems.
 # ==============================================================================
 
 set -euo pipefail
@@ -214,7 +214,7 @@ mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # pacstrap
-pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs
+pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs snapper limine-snapper-sync limine-mkinitcpio-hook
 
 # genfstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -304,7 +304,84 @@ cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
 
 echo "Limine bootloader installed."
 
+# Configure Snapper and Limine for snapshots
+echo "Configuring Snapper and Limine..."
 
+tee /etc/mkinitcpio.conf.d/archhooks.conf <<EOF >/dev/null
+HOOKS=(base udev plymouth keyboard autodetect microcode modconf kms keymap consolefont block encrypt filesystems fsck btrfs-overlayfs)
+EOF
+
+limine_config="/boot/EFI/limine/limine.conf"
+
+CMDLINE=$(grep "^[[:space:]]*CMDLINE=" "$limine_config" | head -1 | sed 's/^[[:space:]]*CMDLINE=//')
+
+tee /etc/default/limine <<EOF >/dev/null
+TARGET_OS_NAME="ArchLinux"
+
+ESP_PATH="/boot"
+
+KERNEL_CMDLINE[default]="$CMDLINE"
+KERNEL_CMDLINE[default]+="quiet splash"
+
+ENABLE_UKI=yes
+CUSTOM_UKI_NAME="archlinux"
+
+ENABLE_LIMINE_FALLBACK=yes
+
+# Find and add other bootloaders
+FIND_BOOTLOADERS=yes
+
+BOOT_ORDER="*, *fallback, Snapshots"
+
+MAX_SNAPSHOT_ENTRIES=5
+
+SNAPSHOT_FORMAT_CHOICE=5
+EOF
+
+# We overwrite the whole thing knowing the limine-update will add the entries for us
+tee /boot/limine.conf <<EOF >/dev/null
+### Read more at config document: https://github.com/limine-bootloader/limine/blob/trunk/CONFIG.md
+#timeout: 3
+default_entry: 2
+interface_branding: Arch Bootloader
+interface_branding_color: 2
+hash_mismatch_panic: no
+
+term_background: 1a1b26
+backdrop: 1a1b26
+
+# Terminal colors (Tokyo Night palette)
+term_palette: 15161e;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;a9b1d6
+term_palette_bright: 414868;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;c0caf5
+
+# Text colors
+term_foreground: c0caf5
+term_foreground_bright: c0caf5
+term_background_bright: 24283b
+
+EOF
+
+if ! snapper list-configs 2>/dev/null | grep -q "root"; then
+  snapper -c root create-config /
+fi
+
+if ! snapper list-configs 2>/dev/null | grep -q "home"; then
+  snapper -c home create-config /home
+fi
+
+# Tweak default Snapper configs
+sed -i 's/^TIMELINE_CREATE="yes"/TIMELINE_CREATE="no"/' /etc/snapper/configs/{root,home}
+sed -i 's/^NUMBER_LIMIT="50"/NUMBER_LIMIT="5"/' /etc/snapper/configs/{root,home}
+sed -i 's/^NUMBER_LIMIT_IMPORTANT="10"/NUMBER_LIMIT_IMPORTANT="5"/' /etc/snapper/configs/{root,home}
+
+systemctl enable limine-snapper-sync.service
+
+limine-update
+
+# Remove the archinstall-created Limine entry
+while IFS= read -r bootnum; do
+  efibootmgr -b "$bootnum" -B >/dev/null 2>&1
+done < <(efibootmgr | grep -E "^Boot[0-9]{4}\*? Arch Linux Limine" | sed 's/^Boot\([0-9]\{4\}\).*/\1/')
 
 # enable NetworkManager (optional)
 systemctl enable NetworkManager
