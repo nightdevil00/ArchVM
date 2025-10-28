@@ -214,7 +214,7 @@ mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # pacstrap
-pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs snapper base-devel
+pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs 
 
 # genfstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -224,9 +224,9 @@ echo "$root_partition" > /mnt/ROOT_PART_PATH
 
 # Create Limine config file
 echo "Creating /boot/EFI/limine/limine.conf..."
-mkdir -p /mnt/boot/EFI/limine
-ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
-cat > /mnt/boot/EFI/limine/limine.conf <<LIMINE_CONF
+mkdir -p /mnt/boot/
+ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$root_partition")
+cat > /mnt/boot/limine.conf <<LIMINE_CONF
 TIMEOUT=5
 DEFAULT_ENTRY=1
 
@@ -234,7 +234,7 @@ DEFAULT_ENTRY=1
     PROTOCOL=linux
     KERNEL_PATH=boot:///vmlinuz-linux
     INITRD_PATH=boot:///initramfs-linux.img
-    CMDLINE=root=UUID=${ROOT_UUID} rootflags=subvol=@ rw cryptdevice=UUID=${ROOT_UUID}:cryptroot
+    CMDLINE=root=PARTUUID=${ROOT_PARTUUID} rootflags=subvol=@ rw cryptdevice=PARTUUID=${ROOT_PARTUUID}:cryptroot
 LIMINE_CONF
 
 # user input for username/password
@@ -260,7 +260,7 @@ set -euo pipefail
 source /arch_install_vars.sh
 
 # find UUID of root partition (the underlying encrypted partition)
-ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT_PART")
 
 # timezone / locale
 ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
@@ -281,7 +281,7 @@ echo "$USERNAME:$USER_PASS" | chpasswd
 echo "$USERNAME ALL=(ALL) ALL" >> /etc/sudoers
 
 # crypttab
-echo "cryptroot UUID=$ROOT_UUID none luks,discard" > /etc/crypttab
+echo "cryptroot PARTUUID=$ROOT_PARTUUID none luks,discard" > /etc/crypttab
 
 # mkinitcpio hooks
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
@@ -311,7 +311,7 @@ tee /etc/mkinitcpio.conf.d/archhooks.conf <<EOF >/dev/null
 HOOKS=(base udev plymouth keyboard autodetect microcode modconf kms keymap consolefont block encrypt filesystems fsck btrfs-overlayfs)
 EOF
 
-limine_config="/boot/EFI/limine/limine.conf"
+limine_config="/boot/limine.conf"
 
 CMDLINE=$(grep "^[[:space:]]*CMDLINE=" "$limine_config" | head -1 | sed 's/^[[:space:]]*CMDLINE=//')
 
