@@ -227,8 +227,12 @@ read -rp "New username: " username
 read -rsp "Password for $username: " user_password; echo
 read -rsp "Root password: " root_password; echo
 
+efi_partition_number=$(cat "/sys/class/block/$(basename "$efi_partition")/partition")
+
 cat > /mnt/arch_install_vars.sh <<EOF
 ROOT_PART="$root_partition"
+EFI_DISK="$TARGET_DISK"
+EFI_PART_NUM="$efi_partition_number"
 USERNAME="$username"
 USER_PASS="$user_password"
 ROOT_PASS="$root_password"
@@ -282,8 +286,13 @@ DEFAULT_ENTRY=1
     CMDLINE=root=UUID=${ROOT_UUID} rootflags=subvol=@ rw cryptdevice=UUID=${ROOT_UUID}:cryptroot
 LIMINE_CFG
 
-# Install Limine for UEFI systems
-limine-install
+# Manually install Limine for UEFI
+mkdir -p /boot/EFI/limine
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
+cp /usr/share/limine/BOOTIA32.EFI /boot/EFI/limine/
+
+# Create EFI boot entry
+efibootmgr --create --disk "$EFI_DISK" --part "$EFI_PART_NUM" --label "Arch Linux Limine" --loader /EFI/limine/BOOTX64.EFI --unicode
 
 # As a fallback for some UEFI firmwares, copy the bootloader to the default path
 mkdir -p /boot/EFI/BOOT
