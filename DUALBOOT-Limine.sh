@@ -214,7 +214,7 @@ mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
 # pacstrap
-pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs snapper limine-snapper-sync limine-mkinitcpio-hook
+pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs snapper base-devel
 
 # genfstab
 genfstab -U /mnt >> /mnt/etc/fstab
