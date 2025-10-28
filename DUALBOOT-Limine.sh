@@ -7,7 +7,7 @@
 # The author is NOT responsible for any damage, data loss, or system issues
 # that may result from using or modifying this script. Use at your own risk.
 # Always review and understand the script before running it, especially on
-# production or sensitive systems. V2
+# production or sensitive systems.
 # ==============================================================================
 
 set -euo pipefail
@@ -222,6 +222,20 @@ genfstab -U /mnt >> /mnt/etc/fstab
 # Save root partition path for chroot
 echo "$root_partition" > /mnt/ROOT_PART_PATH
 
+# Create Limine config file
+echo "Creating /boot/limine.cfg..."
+ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
+cat > /mnt/boot/limine.cfg <<LIMINE_CFG
+TIMEOUT=5
+DEFAULT_ENTRY=1
+
+:Arch Linux
+    PROTOCOL=linux
+    KERNEL_PATH=boot:///vmlinuz-linux
+    INITRD_PATH=boot:///initramfs-linux.img
+    CMDLINE=root=UUID=${ROOT_UUID} rootflags=subvol=@ rw cryptdevice=UUID=${ROOT_UUID}:cryptroot
+LIMINE_CFG
+
 # user input for username/password
 read -rp "New username: " username
 read -rsp "Password for $username: " user_password; echo
@@ -274,17 +288,6 @@ mkinitcpio -P
 
 # Install Limine bootloader
 echo "Installing Limine bootloader..."
-
-cat > /boot/limine.cfg <<LIMINE_CFG
-TIMEOUT=5
-DEFAULT_ENTRY=1
-
-:Arch Linux
-    PROTOCOL=linux
-    KERNEL_PATH=boot:///vmlinuz-linux
-    INITRD_PATH=boot:///initramfs-linux.img
-    CMDLINE=root=UUID=${ROOT_UUID} rootflags=subvol=@ rw cryptdevice=UUID=${ROOT_UUID}:cryptroot
-LIMINE_CFG
 
 # Manually install Limine for UEFI
 mkdir -p /boot/EFI/limine
