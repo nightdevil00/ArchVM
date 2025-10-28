@@ -7,7 +7,7 @@
 # The author is NOT responsible for any damage, data loss, or system issues
 # that may result from using or modifying this script. Use at your own risk.
 # Always review and understand the script before running it, especially on
-# production or sensitive systems.
+# production or sensitive systems.v4
 # ==============================================================================
 
 set -euo pipefail
