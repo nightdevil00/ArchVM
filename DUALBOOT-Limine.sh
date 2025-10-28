@@ -7,7 +7,7 @@
 # The author is NOT responsible for any damage, data loss, or system issues
 # that may result from using or modifying this script. Use at your own risk.
 # Always review and understand the script before running it, especially on
-# production or sensitive systems.v3
+# production or sensitive systems.
 # ==============================================================================
 
 set -euo pipefail
@@ -223,9 +223,10 @@ genfstab -U /mnt >> /mnt/etc/fstab
 echo "$root_partition" > /mnt/ROOT_PART_PATH
 
 # Create Limine config file
-echo "Creating /boot/limine.cfg..."
+echo "Creating /boot/EFI/limine/limine.conf..."
+mkdir -p /mnt/boot/EFI/limine
 ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
-cat > /mnt/boot/limine.cfg <<LIMINE_CFG
+cat > /mnt/boot/EFI/limine/limine.conf <<LIMINE_CONF
 TIMEOUT=5
 DEFAULT_ENTRY=1
 
@@ -234,7 +235,7 @@ DEFAULT_ENTRY=1
     KERNEL_PATH=boot:///vmlinuz-linux
     INITRD_PATH=boot:///initramfs-linux.img
     CMDLINE=root=UUID=${ROOT_UUID} rootflags=subvol=@ rw cryptdevice=UUID=${ROOT_UUID}:cryptroot
-LIMINE_CFG
+LIMINE_CONF
 
 # user input for username/password
 read -rp "New username: " username
