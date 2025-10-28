@@ -1,232 +1,216 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Arch Linux Interactive Install Script with Windows Dualboot support in free space and Limine bootloader
-# ==============================================================================
-# DISCLAIMER:
-# This script is provided "as-is" for educational and personal use only.
-# The author is NOT responsible for any damage, data loss, or system issues
-# that may result from using or modifying this script. Use at your own risk.
-# Always review and understand the script before running it, especially on
-# production or sensitive systems.
+# Arch Linux Interactive Install Script with Windows Dualboot & Limine Bootloader
 # ==============================================================================
 
 set -euo pipefail
 
-# check root
+# --- Color definitions ---
+C_RESET="\033[0m"
+C_RED="\033[1;31m"
+C_GREEN="\033[1;32m"
+C_YELLOW="\033[1;33m"
+C_CYAN="\033[1;36m"
+C_WHITE="\033[1;37m"
+
+# --- Root check ---
 if [[ $EUID -ne 0 ]]; then
-  echo "This script must be run as root"
+  echo -e "${C_RED}This script must be run as root.${C_RESET}"
   exit 1
 fi
 
 TMP_MOUNT="/mnt/__arch_install_tmp"
 mkdir -p "$TMP_MOUNT"
 
-# Helper: print a parseable lsblk and return array of disks (TYPE=disk)
+# --- Enumerate disks ---
 declare -a DEVICES=()
-declare -A DEV_MODEL DEV_SIZE DEV_TRAN DEV_MOUNT
+declare -A DEV_MODEL DEV_SIZE DEV_TRAN
 
 while IFS= read -r line; do
-  # lsblk -P fields are KEY="VALUE"
-  eval "$line"   # populates variables like NAME, KNAME, SIZE, MODEL, TRAN, MOUNTPOINT, TYPE
+  eval "$line"
   if [[ "${TYPE:-}" == "disk" ]]; then
     devpath="/dev/${NAME}"
     DEVICES+=("$devpath")
     DEV_MODEL["$devpath"]="${MODEL:-unknown}"
     DEV_SIZE["$devpath"]="${SIZE:-unknown}"
     DEV_TRAN["$devpath"]="${TRAN:-unknown}"
-    DEV_MOUNT["$devpath"]="${MOUNTPOINT:-}"
   fi
-done < <(lsblk -P -o NAME,KNAME,TYPE,SIZE,MODEL,TRAN,MOUNTPOINT)
+done < <(lsblk -P -o NAME,TYPE,SIZE,MODEL,TRAN)
 
 if [ ${#DEVICES[@]} -eq 0 ]; then
-  echo "No block devices found. Exiting."
+  echo -e "${C_RED}No block devices found.${C_RESET}"
   exit 1
 fi
 
-echo "Available physical disks:"
+echo -e "${C_WHITE}Available disks:${C_RESET}"
 for i in "${!DEVICES[@]}"; do
-  idx=$((i+1))
   d=${DEVICES[$i]}
   printf "%2d) %-12s  %8s  %-10s  transport=%s\n" \
-    "$idx" "$d" "${DEV_SIZE[$d]}" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}"
+    "$((i+1))" "$d" "${DEV_SIZE[$d]}" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}"
 done
 
-read -rp $'Enter the number of the disk for Arch installation (e.g., 1): ' disk_number
+read -rp $'\nSelect the disk for Arch installation: ' disk_number
 if ! [[ "$disk_number" =~ ^[0-9]+$ ]] || (( disk_number < 1 || disk_number > ${#DEVICES[@]} )); then
-  echo "Invalid selection. Exiting."
+  echo -e "${C_RED}Invalid selection.${C_RESET}"
   exit 1
 fi
 
 TARGET_DISK="${DEVICES[$((disk_number-1))]}"
-echo "You selected: $TARGET_DISK"
+echo -e "${C_GREEN}Selected:${C_RESET} $TARGET_DISK"
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
+
+# --- Reflector (fastest mirrors) ---
+echo
+echo -e "${C_CYAN}Refreshing mirrorlist with fastest servers...${C_RESET}"
+pacman -Sy --noconfirm reflector
+reflector --country "$(curl -s https://ipapi.co/country_name || echo Worldwide)" --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+echo -e "${C_GREEN}Mirrorlist updated successfully.${C_RESET}"
 
 # --- Windows detection ---
 echo
-echo "Scanning all partitions on all disks for Windows boot files / EFI Microsoft..."
-declare -a PROTECTED_PART_KEYS=()
-declare -a PROTECTED_PART_VALUES=()
+echo -e "${C_WHITE}Scanning for Windows partitions...${C_RESET}"
+declare -a PROTECTED_PARTS=()
 
-# Iterate partitions across all disks (not just selected) to identify Windows systems
 while IFS= read -r line; do
-  eval "$line"   # this yields NAME,TYPE,FSTYPE,MOUNTPOINT etc.
-  if [[ "${TYPE:-}" != "part" ]]; then
-    continue
-  fi
+  eval "$line"
+  [[ "${TYPE:-}" != "part" ]] && continue
   PART="/dev/${NAME}"
-  # skip loop devices, zram, etc
-  if [[ "$PART" =~ loop|sr|md ]]; then
-    continue
-  fi
-
-  # Find filesystem type via blkid (non-interactive)
   FSTYPE=$(blkid -s TYPE -o value "$PART" 2>/dev/null || true)
 
-  # If VFAT/Efi, mount ro and look for EFI/Microsoft
-  if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" || "$FSTYPE" == "fat" ]]; then
-    mkdir -p "$TMP_MOUNT"
+  if [[ "$FSTYPE" =~ ^(vfat|fat32|fat)$ ]]; then
     if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
-        PROTECTED_PART_KEYS+=("$PART")
-        PROTECTED_PART_VALUES+=("EFI Microsoft files found")
-        echo "Protected (EFI): $PART -> EFI Microsoft files found"
+      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]]; then
+        echo -e "${C_YELLOW}Protected:${C_RESET} $PART (EFI Microsoft detected)"
+        PROTECTED_PARTS+=("$PART")
+      fi
+      umount "$TMP_MOUNT" || true
+    fi
+  elif [[ "$FSTYPE" == "ntfs" ]]; then
+    if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
+      if [[ -d "$TMP_MOUNT/Windows" ]]; then
+        echo -e "${C_YELLOW}Protected:${C_RESET} $PART (Windows detected)"
+        PROTECTED_PARTS+=("$PART")
       fi
       umount "$TMP_MOUNT" || true
     fi
   fi
+done < <(lsblk -P -o NAME,TYPE,FSTYPE)
 
-  # If NTFS, mount ro and look for Windows folder or boot files
-  if [[ "$FSTYPE" == "ntfs" ]]; then
-    mkdir -p "$TMP_MOUNT"
-    if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/Windows" ]] || [[ -f "$TMP_MOUNT/bootmgr" ]] || [[ -d "$TMP_MOUNT/Boot" ]]; then
-        PROTECTED_PART_KEYS+=("$PART")
-        PROTECTED_PART_VALUES+=("NTFS Windows files found")
-        echo "Protected (NTFS): $PART -> NTFS Windows files found"
-      fi
-      umount "$TMP_MOUNT" || true
-    fi
+# --- If Windows detected ---
+if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
+  echo
+  echo -e "${C_WHITE}Windows detected. Using available free space only.${C_RESET}"
+  echo
+  echo -e "${C_CYAN}Partition table for $TARGET_DISK:${C_RESET}"
+  echo -e "${C_WHITE}───────────────────────────────────────────────${C_RESET}"
+  parted --script "$TARGET_DISK" unit GB print free | \
+    sed -E "s/(Free Space)/${C_YELLOW}\1${C_RESET}/"
+  echo -e "${C_WHITE}───────────────────────────────────────────────${C_RESET}"
+
+  # Auto-detect first free block
+  FREE_LINE=$(parted --script "$TARGET_DISK" unit GB print free | grep "Free Space" | head -n 1)
+  if [[ -z "$FREE_LINE" ]]; then
+    echo -e "${C_RED}No free space available!${C_RESET}"
+    exit 1
   fi
 
-done < <(lsblk -P -o NAME,TYPE,FSTYPE,MOUNTPOINT)
+  FREE_START=$(echo "$FREE_LINE" | awk '{print $1}' | tr -d 'GB')
+  FREE_END=$(echo "$FREE_LINE" | awk '{print $2}' | tr -d 'GB')
+  FREE_SIZE=$(echo "$FREE_LINE" | awk '{print $3}' | tr -d 'GB')
+  echo
+  echo -e "Detected free space: ${C_YELLOW}${FREE_START}GB → ${FREE_END}GB (${FREE_SIZE}GB)${C_RESET}"
 
-# Summarize
-if [ ${#PROTECTED_PART_KEYS[@]} -gt 0 ]; then
-  echo
-  echo "Detected partitions that look like Windows/EFI. They will not be modified by this script:"
-  for i in "${!PROTECTED_PART_KEYS[@]}"; do
-    echo "  ${PROTECTED_PART_KEYS[$i]} -> ${PROTECTED_PART_VALUES[$i]}"
-  done
-  echo
-  echo "Because Windows partitions were found, the script will NOT automatically rewrite the whole partition table."
-  echo "Instead, we'll show you the free space on the selected disk so you can create partitions only inside free space."
-  echo
-  echo "PARTITION TABLE + FREE SPACE (for $TARGET_DISK):"
-  parted --script "$TARGET_DISK" unit GB print free || true
+  # Suggested layout
+  EFI_START="${FREE_START}GB"
+  EFI_END=$(awk -v s="$FREE_START" 'BEGIN{printf "%.2fGB", s+2}')
+  ROOT_START="$EFI_END"
+  ROOT_END_DEFAULT="100%"
 
   echo
-  echo "Please provide the start and end positions (in GB) for your new Arch partitions within the free area shown above."
-  echo "Example: for an EFI partition you might enter start=1GB end=3GB (i.e., 2GB size)."
-  read -rp "EFI start (e.g. 1GB): " EFI_START
-  read -rp "EFI end (e.g. 3GB): " EFI_END
-  read -rp "Root start (e.g. 3GB): " ROOT_START
-  read -rp "Root end  (e.g. 60GB or 100%): " ROOT_END
+  echo -e "Suggested partitions:"
+  echo -e "  • EFI : ${C_CYAN}${EFI_START}${C_RESET} → ${C_CYAN}${EFI_END}${C_RESET} (2GB)"
+  echo -e "  • ROOT: ${C_CYAN}${ROOT_START}${C_RESET} → ${C_CYAN}${ROOT_END_DEFAULT}${C_RESET}"
+  echo
+  read -rp "Use entire free space for root? (yes/no): " use_all
 
-  echo "Creating EFI partition..."
+  if [[ "$use_all" =~ ^[Nn][Oo]?$ ]]; then
+    read -rp "Enter ROOT end (e.g., 60GB, min 30GB): " ROOT_END_CUSTOM
+    ROOT_END_VAL=$(echo "$ROOT_END_CUSTOM" | tr -d 'GB')
+    if (( $(echo "$ROOT_END_VAL < 30" | bc -l) )); then
+      echo -e "${C_RED}Root must be ≥ 30GB.${C_RESET}"
+      exit 1
+    fi
+    ROOT_END="$ROOT_END_CUSTOM"
+  else
+    ROOT_END="$ROOT_END_DEFAULT"
+  fi
+
+  echo
+  echo -e "${C_YELLOW}Summary:${C_RESET}"
+  echo "  EFI : $EFI_START → $EFI_END"
+  echo "  ROOT: $ROOT_START → $ROOT_END"
+  read -rp "Proceed? (yes/no): " confirm
+  [[ "$confirm" != "yes" ]] && exit 0
+
+  echo "Creating partitions..."
   parted --script "$TARGET_DISK" mkpart primary fat32 "$EFI_START" "$EFI_END"
-  parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on || true
-  echo "Creating root partition..."
+  parted --script "$TARGET_DISK" set 1 boot on || true
   parted --script "$TARGET_DISK" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
+  partprobe "$TARGET_DISK"
 
-  # Refresh partitions
-  partprobe "$TARGET_DISK" || true
-
-  # Determine new partition names: for nvme it's pN, for sd it's sdxN
-  # We'll take the last two partitions created and set them as EFI/root heuristically
   sleep 1
   parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-  # assume last-1 = efi, last = root (best-effort)
   efi_partition="${parts[-2]}"
   root_partition="${parts[-1]}"
-  echo "EFI partition: $efi_partition"
-  echo "Root partition: $root_partition"
-
 else
-  # No Windows detected: confirm full disk wipe
-  echo "No Windows partitions detected on any disk."
-  read -rp "Proceed to wipe and use the entire $TARGET_DISK for Arch? (yes/no): " yn
-  if [[ "$yn" != "yes" ]]; then
-    echo "Aborting."
-    exit 0
-  fi
+  echo
+  echo -e "${C_WHITE}No Windows detected. Using full disk.${C_RESET}"
+  read -rp "Erase all data on $TARGET_DISK and install Arch? (yes/no): " confirm
+  [[ "$confirm" != "yes" ]] && exit 0
 
-  echo "Creating new GPT and partitions (EFI + root) on $TARGET_DISK"
   parted --script "$TARGET_DISK" mklabel gpt
-  # create 2GB EFI
   parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
   parted --script "$TARGET_DISK" set 1 boot on
-  # rest as root
   parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
-  partprobe "$TARGET_DISK" || true
-
-  # find created partitions
+  partprobe "$TARGET_DISK"
   parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
   efi_partition="${parts[0]}"
   root_partition="${parts[1]}"
-  echo "EFI partition: $efi_partition"
-  echo "Root partition: $root_partition"
 fi
 
-# Final safety check: ensure EFI and root variables exist
-if [[ -z "${efi_partition:-}" || -z "${root_partition:-}" ]]; then
-  echo "Couldn't determine new partition paths automatically. Listing partitions for manual verification:"
-  lsblk -o NAME,KNAME,SIZE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
-  echo "Please re-run the script after confirming partition names."
-  exit 1
-fi
+echo -e "${C_GREEN}EFI partition:${C_RESET} $efi_partition"
+echo -e "${C_GREEN}ROOT partition:${C_RESET} $root_partition"
 
-# Format EFI partition
-echo "Formatting EFI partition ($efi_partition) as FAT32..."
+# --- Filesystem setup ---
 mkfs.fat -F32 "$efi_partition"
-
-# Ask for LUKS passphrase (interactively) then format root and open
-echo "Encrypting root partition ($root_partition) with LUKS2."
-echo "You will be prompted interactively by cryptsetup."
 cryptsetup luksFormat "$root_partition"
 cryptsetup luksOpen "$root_partition" cryptroot
-
-# create btrfs
-echo "Creating btrfs on /dev/mapper/cryptroot..."
 mkfs.btrfs -f /dev/mapper/cryptroot
 
-# mount and create subvolumes
+# Subvolumes
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 umount /mnt
-
 mount -o subvol=@ /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/home
 mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
-
-# mount efi
 mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
-# pacstrap
-pacstrap /mnt base linux linux-firmware linux-headers iwd networkmanager vim nano sudo limine efibootmgr btrfs-progs 
+# --- Install base ---
+pacstrap /mnt base linux linux-firmware linux-headers networkmanager vim nano sudo limine efibootmgr btrfs-progs
 
-# genfstab
+# --- fstab ---
 genfstab -U /mnt >> /mnt/etc/fstab
-
-# Save root partition path for chroot
-echo "$root_partition" > /mnt/ROOT_PART_PATH
-
-# Create Limine config file
-echo "Creating /boot/EFI/limine/limine.conf..."
-mkdir -p /mnt/boot/
 ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$root_partition")
-cat > /mnt/boot/limine.conf <<LIMINE_CONF
+
+# --- Hostname ---
+read -rp "Enter system hostname: " hostname
+echo "$hostname" > /mnt/etc/hostname
+
+# --- Limine config ---
+cat > /mnt/boot/limine.conf <<EOF
 TIMEOUT=5
 DEFAULT_ENTRY=1
 
@@ -235,15 +219,16 @@ DEFAULT_ENTRY=1
     KERNEL_PATH=boot:///vmlinuz-linux
     INITRD_PATH=boot:///initramfs-linux.img
     CMDLINE=root=PARTUUID=${ROOT_PARTUUID} rootflags=subvol=@ rw cryptdevice=PARTUUID=${ROOT_PARTUUID}:cryptroot
-LIMINE_CONF
+EOF
 
-# user input for username/password
+# --- User setup ---
 read -rp "New username: " username
 read -rsp "Password for $username: " user_password; echo
 read -rsp "Root password: " root_password; echo
 
 efi_partition_number=$(cat "/sys/class/block/$(basename "$efi_partition")/partition")
 
+# Pass vars into chroot
 cat > /mnt/arch_install_vars.sh <<EOF
 ROOT_PART="$root_partition"
 EFI_DISK="$TARGET_DISK"
@@ -253,144 +238,67 @@ USER_PASS="$user_password"
 ROOT_PASS="$root_password"
 EOF
 
-# chroot and finish configuration
+# --- chroot ---
 arch-chroot /mnt /bin/bash <<'EOF'
 set -euo pipefail
-# Load variables created earlier
 source /arch_install_vars.sh
-
-# find UUID of root partition (the underlying encrypted partition)
 ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT_PART")
 
-# timezone / locale
 ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 hwclock --systohc
 echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# hostname
-echo "arch-linux" > /etc/hostname
-
-# set root password
 echo "root:$ROOT_PASS" | chpasswd
-
-# create user
 useradd -m -G wheel "$USERNAME"
 echo "$USERNAME:$USER_PASS" | chpasswd
 echo "$USERNAME ALL=(ALL) ALL" >> /etc/sudoers
 
-# crypttab
 echo "cryptroot PARTUUID=$ROOT_PARTUUID none luks,discard" > /etc/crypttab
-
-# mkinitcpio hooks
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
-# Install Limine bootloader
-echo "Installing Limine bootloader..."
-
-# Manually install Limine for UEFI
+# Limine install
 mkdir -p /boot/EFI/limine
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
-cp /usr/share/limine/BOOTIA32.EFI /boot/EFI/limine/
+efibootmgr --create --disk "$EFI_DISK" --part "$EFI_PART_NUM" --label "Arch Linux (Limine)" --loader /EFI/limine/BOOTX64.EFI --unicode
 
-# Create EFI boot entry
-efibootmgr --create --disk "$EFI_DISK" --part "$EFI_PART_NUM" --label "Arch Linux Limine" --loader /EFI/limine/BOOTX64.EFI --unicode
-
-# As a fallback for some UEFI firmwares, copy the bootloader to the default path
 mkdir -p /boot/EFI/BOOT
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
 
-echo "Limine bootloader installed."
-
-# Configure Snapper and Limine for snapshots
-echo "Configuring Snapper and Limine..."
-
-tee /etc/mkinitcpio.conf.d/archhooks.conf <<EOF >/dev/null
-HOOKS=(base udev plymouth keyboard autodetect microcode modconf kms keymap consolefont block encrypt filesystems fsck btrfs-overlayfs)
-EOF
-
-limine_config="/boot/limine.conf"
-
-CMDLINE=$(grep "^[[:space:]]*CMDLINE=" "$limine_config" | head -1 | sed 's/^[[:space:]]*CMDLINE=//')
-
-tee /etc/default/limine <<EOF >/dev/null
-TARGET_OS_NAME="ArchLinux"
-
-ESP_PATH="/boot"
-
-KERNEL_CMDLINE[default]="$CMDLINE"
-KERNEL_CMDLINE[default]+="quiet splash"
-
-ENABLE_UKI=yes
-CUSTOM_UKI_NAME="archlinux"
-
-ENABLE_LIMINE_FALLBACK=yes
-
-# Find and add other bootloaders
-FIND_BOOTLOADERS=yes
-
-BOOT_ORDER="*, *fallback, Snapshots"
-
-MAX_SNAPSHOT_ENTRIES=5
-
-SNAPSHOT_FORMAT_CHOICE=5
-EOF
-
-# We overwrite the whole thing knowing the limine-update will add the entries for us
-tee /boot/limine.conf <<EOF >/dev/null
-### Read more at config document: https://github.com/limine-bootloader/limine/blob/trunk/CONFIG.md
-#timeout: 3
-default_entry: 2
-interface_branding: Arch Bootloader
-interface_branding_color: 2
-hash_mismatch_panic: no
-
-term_background: 1a1b26
-backdrop: 1a1b26
-
-# Terminal colors (Tokyo Night palette)
-term_palette: 15161e;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;a9b1d6
-term_palette_bright: 414868;f7768e;9ece6a;e0af68;7aa2f7;bb9af7;7dcfff;c0caf5
-
-# Text colors
-term_foreground: c0caf5
-term_foreground_bright: c0caf5
-term_background_bright: 24283b
-
-EOF
-
-if ! snapper list-configs 2>/dev/null | grep -q "root"; then
-  snapper -c root create-config /
-fi
-
-if ! snapper list-configs 2>/dev/null | grep -q "home"; then
-  snapper -c home create-config /home
-fi
-
-# Tweak default Snapper configs
-sed -i 's/^TIMELINE_CREATE="yes"/TIMELINE_CREATE="no"/' /etc/snapper/configs/{root,home}
-sed -i 's/^NUMBER_LIMIT="50"/NUMBER_LIMIT="5"/' /etc/snapper/configs/{root,home}
-sed -i 's/^NUMBER_LIMIT_IMPORTANT="10"/NUMBER_LIMIT_IMPORTANT="5"/' /etc/snapper/configs/{root,home}
-
-systemctl enable limine-snapper-sync.service
-
-limine-update
-
-# Remove the archinstall-created Limine entry
-while IFS= read -r bootnum; do
-  efibootmgr -b "$bootnum" -B >/dev/null 2>&1
-done < <(efibootmgr | grep -E "^Boot[0-9]{4}\*? Arch Linux Limine" | sed 's/^Boot\([0-9]\{4\}\).*/\1/')
-
-# enable NetworkManager (optional)
 systemctl enable NetworkManager
-
-# cleanup
 rm -f /arch_install_vars.sh
 EOF
 
+# --- Final steps ---
 echo
-echo "Install steps finished. Review output above for any errors."
-echo "Reboot when ready. If Windows exists it was protected and should appear in GRUB if os-prober detected it."
+echo -e "${C_GREEN}✅ Installation complete!${C_RESET}"
+echo
+echo -e "The system is ready to boot."
+echo -e "Would you like to enter the installed system (chroot) before rebooting?"
+read -rp "Enter chroot now? [y/N]: " enter_chroot
 
+if [[ "$enter_chroot" =~ ^[Yy]$ ]]; then
+  echo
+  echo -e "${C_CYAN}Mounting and entering chroot...${C_RESET}"
+  mount --bind /dev /mnt/dev
+  mount --bind /sys /mnt/sys
+  mount --bind /proc /mnt/proc
+  arch-chroot /mnt
+  echo
+  echo -e "${C_YELLOW}Exiting chroot. You can reboot when ready.${C_RESET}"
+else
+  echo
+  echo -e "${C_CYAN}Skipping manual chroot.${C_RESET}"
+fi
+
+echo
+read -rp "Would you like to reboot now? [Y/n]: " reboot_choice
+if [[ ! "$reboot_choice" =~ ^[Nn]$ ]]; then
+  echo -e "${C_GREEN}Rebooting...${C_RESET}"
+  umount -R /mnt
+  reboot
+else
+  echo -e "${C_YELLOW}Installation complete. You can reboot later manually.${C_RESET}"
+fi
