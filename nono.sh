@@ -2,8 +2,7 @@
 # ==============================================================================
 # Arch Linux Interactive Install Script with Windows Dualboot support and Limine bootloader
 # ==============================================================================
-# DISCLAIMER:
-# For educational/personal use only. Review carefully before running.
+# DISCLAIMER: For educational/personal use only. Review carefully before running.
 # ==============================================================================
 
 set -euo pipefail
@@ -54,16 +53,12 @@ lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
 
 # --- Windows detection ---
 echo
-echo "Scanning all partitions on all disks for Windows boot files / EFI Microsoft..."
+echo "Scanning all partitions on $TARGET_DISK for Windows boot files..."
+declare -A PROTECTED_PARTS=()  # initialize properly
 
-# initialize associative array
-declare -A PROTECTED_PARTS=()
-
-# capture partitions into array (safely)
 mapfile -t PARTS_ARRAY < <(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}')
 
-# iterate normally
-for part in "${PARTS_ARRAY[@]:-}"; do   # <-- the ':-' avoids unbound if empty
+for part in "${PARTS_ARRAY[@]}"; do
     FSTYPE=$(blkid -s TYPE -o value "$part" 2>/dev/null || true)
     [[ -z "$FSTYPE" ]] && continue
 
@@ -92,7 +87,6 @@ for part in "${PARTS_ARRAY[@]:-}"; do   # <-- the ':-' avoids unbound if empty
     fi
 done
 
-
 # --- Partitioning ---
 if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
     echo
@@ -116,13 +110,31 @@ fi
 
 partprobe "$TARGET_DISK"
 
-# --- Determine partitions ---
-parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-efi_partition="${parts[-2]}"
-root_partition="${parts[-1]}"
-echo "EFI: $efi_partition, root: $root_partition"
+# --- Assign EFI and root partitions reliably ---
+mapfile -t NEW_PARTS < <(lsblk -ln -o NAME,TYPE,FSTYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1":"$3":"$4}')
 
-# --- Format and encrypt ---
+efi_partition=""
+root_partition=""
+
+for p in "${NEW_PARTS[@]}"; do
+    IFS=":" read -r DEV UUID FSTYPE <<< "$p"
+    if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" ]]; then
+        efi_partition="$DEV"
+    elif [[ "$FSTYPE" == "btrfs" || "$FSTYPE" == "" ]]; then
+        root_partition="$DEV"
+    fi
+done
+
+if [[ -z "$efi_partition" || -z "$root_partition" ]]; then
+    echo "Could not determine EFI or root partition. Exiting."
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
+    exit 1
+fi
+
+echo "EFI partition: $efi_partition"
+echo "Root partition: $root_partition"
+
+# --- Format & encrypt ---
 mkfs.fat -F32 "$efi_partition"
 cryptsetup luksFormat "$root_partition"
 cryptsetup luksOpen "$root_partition" cryptroot
@@ -140,13 +152,13 @@ mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
 mkdir -p /mnt/boot
 mount "$efi_partition" /mnt/boot
 
-# --- Install base packages ---
-pacstrap /mnt base linux linux-firmware linux-headers vim sudo networkmanager btrfs-progs iwd limine efibootmgr
+# --- Base install ---
+pacstrap /mnt base base-devel linux linux-firmware linux-headers vim sudo networkmanager btrfs-progs iwd limine efibootmgr
 
 # --- FSTAB ---
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# --- Save user variables ---
+# --- User setup ---
 read -rp "New username: " username
 read -rsp "Password for $username: " user_password; echo
 read -rsp "Root password: " root_password; echo
@@ -159,7 +171,7 @@ ROOT_PASS="$root_password"
 EFI_PART="$efi_partition"
 EOF
 
-# --- Chroot for configuration ---
+# --- Chroot & configure ---
 arch-chroot /mnt /bin/bash <<'EOF'
 set -euo pipefail
 source /arch_install_vars.sh
@@ -174,7 +186,7 @@ echo "LANG=en_US.UTF-8" > /etc/locale.conf
 # Hostname
 echo "arch-linux" > /etc/hostname
 
-# User & root passwords
+# Passwords
 echo "root:$ROOT_PASS" | chpasswd
 useradd -m -G wheel "$USERNAME"
 echo "$USERNAME:$USER_PASS" | chpasswd
@@ -188,13 +200,13 @@ echo "cryptroot UUID=$ROOT_UUID none luks,discard" > /etc/crypttab
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
-# --- Limine installation ---
+# Limine installation
 mkdir -p /boot/EFI/limine
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 efibootmgr --create --disk "$EFI_PART" --part 1 --label "Arch Linux Limine" --loader '\EFI\limine\BOOTX64.EFI' --unicode
 
-# limine.conf
-cat > /boot/EFI/limine/limine.conf <<LIMCONF
+# Limine config
+cat > /boot/limine.conf <<LIMCONF
 timeout: 3
 
 /Arch Linux
@@ -213,6 +225,8 @@ LIMCONF
 # Enable NetworkManager
 systemctl enable NetworkManager
 
+mkinitcpio -P
+
 # Cleanup
 rm -f /arch_install_vars.sh
 EOF
@@ -220,4 +234,3 @@ EOF
 echo
 echo "Arch installation with Limine completed!"
 echo "Reboot and remove installation media."
-
