@@ -421,10 +421,25 @@ echo "PATH inside chroot: $PATH"
 echo "==> Installing Limine..."
 limine-install "/boot"
 
-# Copy configuration to EFI
-cp -v "/boot/limine/limine.conf" "/boot/EFI/BOOT/"
+echo "==> Writing limine.conf..."
+mkdir -p "/boot/limine"
+cat > "/boot/limine/limine.conf" <<LIMINE_CONF_EOF
+timeout: 5
 
-echo "Limine installation complete and configured automatically!"
+/Arch Linux
+    protocol: linux
+    path: uuid(${EFI_PARTUUID}):/vmlinuz-linux
+    cmdline: root=UUID=${ROOT_UUID} rw rootflags=subvol=@ loglevel=3 quiet
+    module_path: uuid(${EFI_PARTUUID}):/initramfs-linux.img
+LIMINE_CONF_EOF
+
+echo "limine.conf created at /boot/limine/limine.conf"
+
+
+# Copy configuration to EFI
+cp -v "/boot/limine/limine.conf" "/boot/"
+
+echo "Limine installation complete and configured automatically at /boot/!"
 
 # Create pacman hook for automatic Limine updates
 
@@ -454,19 +469,6 @@ Exec = /usr/bin/limine-install
 
 HOOK_EOF
 
-echo "==> Writing limine.conf..."
-mkdir -p "/boot/limine"
-cat > "/boot/limine/limine.conf" <<LIMINE_CONF_EOF
-timeout: 5
-
-/Arch Linux
-    protocol: linux
-    path: uuid(${EFI_PARTUUID}):/vmlinuz-linux
-    cmdline: root=UUID=${ROOT_UUID} rw rootflags=subvol=@ loglevel=3 quiet
-    module_path: uuid(${EFI_PARTUUID}):/initramfs-linux.img
-LIMINE_CONF_EOF
-
-echo "limine.conf created at /boot/limine/limine.conf"
 
 mkinitcpio -P
 
