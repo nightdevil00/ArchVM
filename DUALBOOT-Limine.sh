@@ -411,19 +411,7 @@ sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystem
 mkinitcpio -P
 
 # limine config
-echo "==> Writing limine.conf..."
-mkdir -p "/boot/limine"
-cat > "/boot/limine/limine.conf" <<LIMINE_CONF_EOF
-timeout: 5
 
-/Arch Linux
-    protocol: linux
-    path: uuid(${EFI_PARTUUID}):/vmlinuz-linux
-    cmdline: root=UUID=${ROOT_UUID} rw rootflags=subvol=@ loglevel=3 quiet
-    module_path: uuid(${EFI_PARTUUID}):/initramfs-linux.img
-LIMINE_CONF_EOF
-
-echo "limine.conf created at /boot/limine/limine.conf"
 
 # ------------------------
 # INSTALL LIMINE TO EFI
@@ -465,6 +453,22 @@ When = PostTransaction
 Exec = /usr/bin/limine-install
 
 HOOK_EOF
+
+echo "==> Writing limine.conf..."
+mkdir -p "/boot/limine"
+cat > "/boot/limine/limine.conf" <<LIMINE_CONF_EOF
+timeout: 5
+
+/Arch Linux
+    protocol: linux
+    path: uuid(${EFI_PARTUUID}):/vmlinuz-linux
+    cmdline: root=UUID=${ROOT_UUID} rw rootflags=subvol=@ loglevel=3 quiet
+    module_path: uuid(${EFI_PARTUUID}):/initramfs-linux.img
+LIMINE_CONF_EOF
+
+echo "limine.conf created at /boot/limine/limine.conf"
+
+mkinitcpio -P
 
 
 # enable NetworkManager (optional)
