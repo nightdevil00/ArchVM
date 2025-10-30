@@ -4,6 +4,12 @@
 # Dualboot with Windows (preserves Windows EFI)
 # Limine Bootloader (UEFI only)
 # ==============================================================================
+
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "❌ This script must be run in Bash. Try: bash $0"
+  exit 1
+fi
+
 set -euo pipefail
 
 # --- Root check ---
