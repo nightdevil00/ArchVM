@@ -50,7 +50,7 @@ TARGET_DISK="${DEVICES[$((disk_number-1))]}"
 echo "Selected: $TARGET_DISK"
 
 # --- Windows detection ---
-declare -A PROTECTED_PARTS
+declare -A PROTECTED_PARTS=()
 echo "Scanning partitions for Windows..."
 
 while IFS= read -r line; do
@@ -221,9 +221,23 @@ timeout: 5
     cmdline: cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
 EOL
 
-EFI_DEV=$(findmnt -no SOURCE /boot)
-DISK=$(lsblk -no pkname "$EFI_DEV")
-PARTNO=$(lsblk -no partno "$EFI_DEV")
+EFI_DEV=$(findmnt -no SOURCE /boot 2>/dev/null || true)
+EFI_DEV="${EFI_DEV:-}"
+
+DISK=$(lsblk -no pkname "$EFI_DEV" 2>/dev/null || true)
+DISK="${DISK:-}"
+
+PARTNO=$(lsblk -no partno "$EFI_DEV" 2>/dev/null || true)
+PARTNO="${PARTNO:-}"
+
+if [[ -n "$DISK" && -n "$PARTNO" ]]; then
+  efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
+      --label "Arch Linux (Limine)" \
+      --loader '\EFI\limine\BOOTX64.EFI'
+else
+  echo "⚠️ Skipping efibootmgr — could not detect disk or partition number."
+fi
+
 
 efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
     --label "Arch Linux (Limine)" \
