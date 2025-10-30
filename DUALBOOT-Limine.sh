@@ -164,31 +164,63 @@ btrfs subvolume create /swap
 btrfs filesystem mkswapfile --size 4g /swap/swapfile
 swapon -p 0 /swap/swapfile
 
-# Limine setup
-mkdir -p /boot/EFI/limine
+# --- Limine setup (UEFI) ---
+echo "[*] Setting up Limine bootloader..."
+
+# Create EFI directories
+mkdir -p /boot/EFI/limine /boot/EFI/Linux
+
+# Copy Limine EFI loader
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 
+# Create EFI stub kernel image
+echo "[*] Building EFI stub kernel..."
+objcopy \
+  --add-section .osrel=/etc/os-release --change-section-vma .osrel=0x20000 \
+  --add-section .cmdline=/proc/cmdline --change-section-vma .cmdline=0x30000 \
+  --add-section .linux=/boot/vmlinuz-linux --change-section-vma .linux=0x2000000 \
+  --add-section .initrd=/boot/initramfs-linux.img --change-section-vma .initrd=0x3000000 \
+  /usr/lib/systemd/boot/efi/linuxx64.efi.stub \
+  /boot/EFI/Linux/arch-linux.efi
+
+# Optional: build fallback EFI image too
+objcopy \
+  --add-section .osrel=/etc/os-release --change-section-vma .osrel=0x20000 \
+  --add-section .cmdline=/proc/cmdline --change-section-vma .cmdline=0x30000 \
+  --add-section .linux=/boot/vmlinuz-linux --change-section-vma .linux=0x2000000 \
+  --add-section .initrd=/boot/initramfs-linux-fallback.img --change-section-vma .initrd=0x3000000 \
+  /usr/lib/systemd/boot/efi/linuxx64.efi.stub \
+  /boot/EFI/Linux/arch-linux-fallback.efi
+
+# Detect swap offset and UUID for resume
 RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /swap/swapfile | awk '{print $1}')
 RESUME_UUID=$(blkid -s UUID -o value /dev/mapper/cryptroot)
 
+# Create Limine configuration
 cat > /boot/EFI/limine/limine.conf <<EOL
-timeout: 3
+timeout: 5
 
 /Arch Linux
-    protocol: linux
-    path: boot():/vmlinuz-linux
-    cmdline: quiet cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
-    module_path: boot():/initramfs-linux.img
+    protocol: efi
+    path: boot():/EFI/Linux/arch-linux.efi
+    cmdline: cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
 
 /Arch Linux (fallback)
-    protocol: linux
-    path: boot():/vmlinuz-linux
-    cmdline: quiet cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
-    module_path: boot():/initramfs-linux-fallback.img
+    protocol: efi
+    path: boot():/EFI/Linux/arch-linux-fallback.efi
+    cmdline: cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
 EOL
 
-# Add EFI entry
-efibootmgr --create --disk "$ROOT_PART" --part 1 --label "Arch Linux Limine Bootloader" --loader '\EFI\limine\BOOTX64.EFI' --unicode
+# Register Limine as a UEFI boot entry
+EFI_DEV=$(findmnt -no SOURCE /boot)
+DISK=$(lsblk -no pkname "$EFI_DEV")
+PARTNO=$(lsblk -no partno "$EFI_DEV")
+efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
+    --label "Arch Linux (Limine)" \
+    --loader '\EFI\limine\BOOTX64.EFI'
+
+echo "[+] Limine installation complete."
+
 
 # Enable NetworkManager
 systemctl enable NetworkManager
