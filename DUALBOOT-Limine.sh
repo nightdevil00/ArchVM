@@ -94,7 +94,7 @@ if [[ ${#PROTECTED_PARTS[@]} -gt 0 ]]; then
   read -rp "Enter ROOT partition start (e.g. 3GB): " ROOT_START
   read -rp "Enter ROOT partition end (e.g. 100%): " ROOT_END
   parted --script "$TARGET_DISK" mkpart primary fat32 "$EFI_START" "$EFI_END"
-  parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on
+  parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') esp on
   parted --script "$TARGET_DISK" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
 else
   read -rp "Use full disk $TARGET_DISK? (yes/no): " yn
