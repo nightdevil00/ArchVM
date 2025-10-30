@@ -5,6 +5,11 @@
 # Limine Bootloader (UEFI only)
 # ==============================================================================
 
+# --- Log setup ---
+LOG_FILE="/tmp/arch_install_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Logging to $LOG_FILE"
+
 if [[ -z "${BASH_VERSION:-}" ]]; then
   echo "❌ This script must be run in Bash. Try: bash $0"
   exit 1
