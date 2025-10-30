@@ -252,7 +252,7 @@ rm -f /arch_install_vars.sh
 EOF
 
 # --- Cleanup ---
-umount -R /mnt
+#umount -R /mnt
 cryptsetup luksClose cryptroot
 rm -rf "$TMP_MOUNT"
 
