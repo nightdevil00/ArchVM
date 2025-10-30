@@ -98,12 +98,12 @@ if [[ ${#PROTECTED_PARTS[@]} -gt 0 ]]; then
   parted --script "$TARGET_DISK" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
 else
   read -rp "Use full disk $TARGET_DISK? (yes/no): " yn
-        [[ "$yn" != "yes" ]] && exit 0
-        parted --script "$TARGET_DISK" mklabel gpt
-        parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
-        parted --script "$TARGET_DISK" set 1 esp on
-        parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
-      fi
+  [[ "$yn" != "yes" ]] && exit 0
+  parted --script "$TARGET_DISK" mklabel gpt
+  parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
+  parted --script "$TARGET_DISK" set 1 esp on
+  parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
+fi
 partprobe "$TARGET_DISK" || true
 sleep 2
 
@@ -114,17 +114,27 @@ root_partition="${parts[-1]}"
 echo "EFI: $efi_partition, ROOT: $root_partition"
 
 # --- Format and encrypt ---
+echo "Formatting EFI partition..."
 mkfs.fat -F32 "$efi_partition"
+
+echo "Setting up LUKS encryption..."
 cryptsetup luksFormat "$root_partition"
 cryptsetup luksOpen "$root_partition" cryptroot
 
+# Wait for device to be ready
+sleep 2
+[[ -b /dev/mapper/cryptroot ]] || { echo "❌ /dev/mapper/cryptroot not found"; exit 1; }
+
 # --- Btrfs setup ---
+echo "Creating Btrfs filesystem..."
 mkfs.btrfs -f /dev/mapper/cryptroot
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@snapshots
 umount /mnt
+
+echo "Mounting subvolumes..."
 mount -o subvol=@ /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/{home,.snapshots,boot}
 mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
@@ -132,6 +142,7 @@ mount -o subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
 mount "$efi_partition" /mnt/boot
 
 # --- Base install ---
+echo "Installing base system..."
 pacstrap /mnt base linux linux-firmware vim sudo networkmanager \
          btrfs-progs iwd git limine efibootmgr binutils
 
@@ -143,15 +154,19 @@ read -rp "Username: " username
 read -rsp "Password for $username: " user_pass; echo
 read -rsp "Root password: " root_pass; echo
 
+# Get UUIDs before chroot
+ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
+
 cat > /mnt/arch_install_vars.sh <<EOF
 ROOT_PART="$root_partition"
+ROOT_UUID="$ROOT_UUID"
 USERNAME="$username"
 USER_PASS="$user_pass"
 ROOT_PASS="$root_pass"
 EOF
 
 # --- Chroot configuration ---
-arch-chroot /mnt /bin/bash <<'EOF'
+arch-chroot /mnt /bin/bash <<'CHROOT_EOF'
 set -euo pipefail
 source /arch_install_vars.sh
 
@@ -166,23 +181,34 @@ echo "LANG=en_US.UTF-8" > /etc/locale.conf
 echo "arch-linux" > /etc/hostname
 
 # Users
-    echo "root:$ROOT_PASS" | chpasswd
-    useradd -m -G wheel "$USERNAME"
-    echo "$USERNAME:$USER_PASS" | chpasswd
-    mkdir -p /etc/sudoers.d/ # Ensure directory exists
-    echo "$USERNAME ALL=(ALL) ALL" > /etc/sudoers.d/$USERNAME
+echo "root:$ROOT_PASS" | chpasswd
+useradd -m -G wheel "$USERNAME"
+echo "$USERNAME:$USER_PASS" | chpasswd
+mkdir -p /etc/sudoers.d/
+echo "$USERNAME ALL=(ALL) ALL" > /etc/sudoers.d/$USERNAME
+chmod 440 /etc/sudoers.d/$USERNAME
+
 # Crypttab
-ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 echo "cryptroot UUID=$ROOT_UUID none luks,discard" > /etc/crypttab
 
-# Initramfs
-sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf keyboard keymap block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+# Initramfs - IMPORTANT: Correct hook order
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
 # Swap
 btrfs subvolume create /swap
 btrfs filesystem mkswapfile --size 4g /swap/swapfile
 swapon /swap/swapfile
+echo "/swap/swapfile none swap defaults 0 0" >> /etc/fstab
+
+# Get resume parameters
+RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /swap/swapfile | awk '{print $1}')
+RESUME_UUID=$(blkid -s UUID -o value /dev/mapper/cryptroot)
+
+# --- Create cmdline file for EFI stub ---
+cat > /tmp/cmdline.txt <<EOL
+cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET quiet splash
+EOL
 
 # --- Limine setup (UEFI) ---
 echo "[*] Installing Limine (UEFI)..."
@@ -190,11 +216,11 @@ echo "[*] Installing Limine (UEFI)..."
 mkdir -p /boot/EFI/{limine,Linux}
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 
-# Build EFI-stub kernels
+# Build EFI-stub kernels with proper cmdline embedding
 echo "[*] Building EFI-stub kernel images..."
 objcopy \
   --add-section .osrel=/etc/os-release --change-section-vma .osrel=0x20000 \
-  --add-section .cmdline=/proc/cmdline --change-section-vma .cmdline=0x30000 \
+  --add-section .cmdline=/tmp/cmdline.txt --change-section-vma .cmdline=0x30000 \
   --add-section .linux=/boot/vmlinuz-linux --change-section-vma .linux=0x2000000 \
   --add-section .initrd=/boot/initramfs-linux.img --change-section-vma .initrd=0x3000000 \
   /usr/lib/systemd/boot/efi/linuxx64.efi.stub \
@@ -202,44 +228,40 @@ objcopy \
 
 objcopy \
   --add-section .osrel=/etc/os-release --change-section-vma .osrel=0x20000 \
-  --add-section .cmdline=/proc/cmdline --change-section-vma .cmdline=0x30000 \
+  --add-section .cmdline=/tmp/cmdline.txt --change-section-vma .cmdline=0x30000 \
   --add-section .linux=/boot/vmlinuz-linux --change-section-vma .linux=0x2000000 \
   --add-section .initrd=/boot/initramfs-linux-fallback.img --change-section-vma .initrd=0x3000000 \
   /usr/lib/systemd/boot/efi/linuxx64.efi.stub \
   /boot/EFI/Linux/arch-linux-fallback.efi
 
-RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /swap/swapfile | awk '{print $1}')
-RESUME_UUID=$(blkid -s UUID -o value /dev/mapper/cryptroot)
-
+# Create Limine config (as backup boot method)
 cat > /boot/EFI/limine/limine.conf <<EOL
 timeout: 5
 
 /Arch Linux
     protocol: efi
     path: boot():/EFI/Linux/arch-linux.efi
-    cmdline: cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
 
 /Arch Linux (fallback)
     protocol: efi
     path: boot():/EFI/Linux/arch-linux-fallback.efi
-    cmdline: cryptdevice=UUID=$ROOT_UUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET
 EOL
 
-EFI_DEV=$(findmnt -no SOURCE /boot 2>/dev/null || true)
-EFI_DEV="${EFI_DEV:-}"
-
-DISK=$(lsblk -no pkname "$EFI_DEV" 2>/dev/null || true)
-DISK="${DISK:-}"
-
-PARTNO=$(lsblk -no partno "$EFI_DEV" 2>/dev/null || true)
-PARTNO="${PARTNO:-}"
-
-if [[ -n "$DISK" && -n "$PARTNO" ]]; then
-  efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
-      --label "Arch Linux (Limine)" \
-      --loader '\EFI\limine\BOOTX64.EFI'
+# Register boot entry
+EFI_DEV=$(findmnt -no SOURCE /boot 2>/dev/null || echo "")
+if [[ -n "$EFI_DEV" ]]; then
+  DISK=$(lsblk -no pkname "$EFI_DEV" 2>/dev/null || echo "")
+  PARTNO=$(lsblk -no partno "$EFI_DEV" 2>/dev/null || echo "")
+  
+  if [[ -n "$DISK" && -n "$PARTNO" ]]; then
+    efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
+        --label "Arch Linux (Limine)" \
+        --loader '\EFI\limine\BOOTX64.EFI' || echo "⚠️ efibootmgr failed"
+  else
+    echo "⚠️ Skipping efibootmgr — could not detect disk or partition number."
+  fi
 else
-  echo "⚠️ Skipping efibootmgr — could not detect disk or partition number."
+  echo "⚠️ Could not find EFI device"
 fi
 
 echo "[+] Limine installation complete."
@@ -247,12 +269,21 @@ echo "[+] Limine installation complete."
 # Enable network
 systemctl enable NetworkManager
 
-rm -f /arch_install_vars.sh
-EOF
+# Cleanup
+rm -f /arch_install_vars.sh /tmp/cmdline.txt
+CHROOT_EOF
 
 # --- Cleanup ---
-umount -R /mnt
-cryptsetup luksClose cryptroot
+echo "Unmounting filesystems..."
+umount -R /mnt || true
+cryptsetup luksClose cryptroot || true
 rm -rf "$TMP_MOUNT"
 
-echo "✅ Installation complete. You can now reboot into Arch Linux via Limine."
+echo ""
+echo "✅ Installation complete!"
+echo ""
+echo "Before rebooting, verify:"
+echo "  1. EFI boot entry was created: efibootmgr -v"
+echo "  2. Windows boot entry still exists"
+echo ""
+echo "You can now reboot into Arch Linux via Limine."
