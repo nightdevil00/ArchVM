@@ -238,11 +238,6 @@ else
   echo "⚠️ Skipping efibootmgr — could not detect disk or partition number."
 fi
 
-
-efibootmgr --create --disk "/dev/$DISK" --part "$PARTNO" \
-    --label "Arch Linux (Limine)" \
-    --loader '\EFI\limine\BOOTX64.EFI'
-
 echo "[+] Limine installation complete."
 
 # Enable network
