@@ -1,340 +1,445 @@
 #!/usr/bin/env bash
-# safer-arch-install-fixed.sh
-# Improved disk listing, Windows detection, and proper free space handling
+# arch-partition-manager.sh
+# Creates/deletes partitions while preserving Windows, for use with archinstall
 set -euo pipefail
 
-# check root
+# Color codes
+C_BLUE="\e[34m"
+C_GREEN="\e[32m"
+C_RED="\e[31m"
+C_YELLOW="\e[33m"
+C_RESET="\e[0m"
+
+info() { echo -e "${C_BLUE}[INFO]${C_RESET} $1"; }
+success() { echo -e "${C_GREEN}[SUCCESS]${C_RESET} $1"; }
+error() { echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2; }
+warn() { echo -e "${C_YELLOW}[WARNING]${C_RESET} $1"; }
+
+# Check root
 if [[ $EUID -ne 0 ]]; then
-  echo "This script must be run as root"
+  error "This script must be run as root"
   exit 1
 fi
 
-TMP_MOUNT="/mnt/__arch_install_tmp"
+TMP_MOUNT="/mnt/__arch_partition_tmp"
 mkdir -p "$TMP_MOUNT"
 
-# Helper: print a parseable lsblk and return array of disks (TYPE=disk)
-declare -a DEVICES=()
-declare -A DEV_MODEL DEV_SIZE DEV_TRAN DEV_MOUNT
+# Cleanup on exit
+cleanup() {
+  umount "$TMP_MOUNT" 2>/dev/null || true
+  rmdir "$TMP_MOUNT" 2>/dev/null || true
+}
+trap cleanup EXIT
 
+# ============================================================================
+# Disk Discovery
+# ============================================================================
+
+declare -a DEVICES=()
+declare -A DEV_MODEL DEV_SIZE DEV_TRAN
+
+info "Discovering block devices..."
 while IFS= read -r line; do
-  # lsblk -P fields are KEY="VALUE"
-  eval "$line"   # populates variables like NAME, KNAME, SIZE, MODEL, TRAN, MOUNTPOINT, TYPE
+  eval "$line"
   if [[ "${TYPE:-}" == "disk" ]]; then
     devpath="/dev/${NAME}"
     DEVICES+=("$devpath")
     DEV_MODEL["$devpath"]="${MODEL:-unknown}"
     DEV_SIZE["$devpath"]="${SIZE:-unknown}"
     DEV_TRAN["$devpath"]="${TRAN:-unknown}"
-    DEV_MOUNT["$devpath"]="${MOUNTPOINT:-}"
   fi
-done < <(lsblk -P -o NAME,KNAME,TYPE,SIZE,MODEL,TRAN,MOUNTPOINT)
+done < <(lsblk -P -o NAME,TYPE,SIZE,MODEL,TRAN)
 
 if [ ${#DEVICES[@]} -eq 0 ]; then
-  echo "No block devices found. Exiting."
+  error "No block devices found. Exiting."
   exit 1
 fi
 
-echo "Available physical disks:"
+echo ""
+echo "========================================"
+echo "     Available Physical Disks"
+echo "========================================"
 for i in "${!DEVICES[@]}"; do
   idx=$((i+1))
   d=${DEVICES[$i]}
-  printf "%2d) %-12s  %8s  %-10s  transport=%s\n" \
-    "$idx" "$d" "${DEV_SIZE[$d]}" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}"
+  printf "%2d) %-12s  %8s  %-20s  %s\n" \
+    "$idx" "$d" "${DEV_SIZE[$d]}" "${DEV_MODEL[$d]}" "transport=${DEV_TRAN[$d]}"
 done
+echo "========================================"
 
-read -rp $'Enter the number of the disk for Arch installation (e.g., 1): ' disk_number
+read -rp "Enter the number of the disk to manage (e.g., 1): " disk_number
 if ! [[ "$disk_number" =~ ^[0-9]+$ ]] || (( disk_number < 1 || disk_number > ${#DEVICES[@]} )); then
-  echo "Invalid selection. Exiting."
+  error "Invalid selection. Exiting."
   exit 1
 fi
 
 TARGET_DISK="${DEVICES[$((disk_number-1))]}"
-echo "You selected: $TARGET_DISK"
+success "Selected disk: $TARGET_DISK"
+echo ""
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
 
-echo
-echo "What do you want to do?"
-echo "  1) Create partitions for Arch Linux"
-echo "  2) Delete a partition"
-read -rp "Enter your choice (1-2): " choice
+# ============================================================================
+# Windows Detection
+# ============================================================================
 
-case "$choice" in
-  1)
-
-# --- Windows detection ---
-echo
-echo "Scanning all partitions on all disks for Windows boot files / EFI Microsoft..."
-declare -A PROTECTED_PARTS  # map of partition -> reason
+echo ""
+info "Scanning all disks for Windows installations..."
+declare -A PROTECTED_PARTS
 
 while IFS= read -r line; do
   eval "$line"
-  if [[ "${TYPE:-}" != "part" ]]; then
-    continue
-  fi
+  [[ "${TYPE:-}" != "part" ]] && continue
+  
   PART="/dev/${NAME}"
   [[ "$PART" =~ loop|sr|md ]] && continue
 
   FSTYPE=$(blkid -s TYPE -o value "$PART" 2>/dev/null || true)
 
-  if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" || "$FSTYPE" == "fat" ]]; then
-    mkdir -p "$TMP_MOUNT"
+  # Check for Windows EFI
+  if [[ "$FSTYPE" =~ ^(vfat|fat32|fat)$ ]]; then
     if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
-        PROTECTED_PARTS["$PART"]="EFI Microsoft files found"
-        echo "Protected (EFI): $PART -> ${PROTECTED_PARTS[$PART]}"
+      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || \
+         [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || \
+         [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
+        PROTECTED_PARTS["$PART"]="Windows EFI partition"
+        warn "Protected: $PART (${PROTECTED_PARTS[$PART]})"
       fi
       umount "$TMP_MOUNT" || true
     fi
   fi
 
+  # Check for Windows NTFS
   if [[ "$FSTYPE" == "ntfs" ]]; then
-    mkdir -p "$TMP_MOUNT"
     if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/Windows" ]] || [[ -f "$TMP_MOUNT/bootmgr" ]] || [[ -d "$TMP_MOUNT/Boot" ]]; then
-        PROTECTED_PARTS["$PART"]="NTFS Windows files found"
-        echo "Protected (NTFS): $PART -> ${PROTECTED_PARTS[$PART]}"
+      if [[ -d "$TMP_MOUNT/Windows" ]] || \
+         [[ -f "$TMP_MOUNT/bootmgr" ]] || \
+         [[ -d "$TMP_MOUNT/Boot" ]]; then
+        PROTECTED_PARTS["$PART"]="Windows system partition"
+        warn "Protected: $PART (${PROTECTED_PARTS[$PART]})"
       fi
       umount "$TMP_MOUNT" || true
     fi
   fi
-done < <(lsblk -P -o NAME,TYPE,FSTYPE,MOUNTPOINT)
+done < <(lsblk -P -o NAME,TYPE,FSTYPE)
 
-# --- Show free space ---
-echo
-echo "PARTITION TABLE + FREE SPACE (for $TARGET_DISK):"
-parted --script "$TARGET_DISK" unit GB print free | sed -E 's/^(Number[[:space:]]+)(Start[[:space:]]+)(End[[:space:]]+)(Size[[:space:]]+)(.*)/\1\4\2\3\5/' | sed -E 's/^([[:space:]]*[0-9]*[[:space:]]+)([0-9\.]*GB[[:space:]]+)([0-9\.]*GB[[:space:]]+)([0-9\.]*GB[[:space:]]+)(.*)/\1\4\2\3\5/' | sed '/Free Space/s/.*/\x1b[1;33m&\x1b[0m/' || true
+if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
+  success "Found ${#PROTECTED_PARTS[@]} Windows partition(s) - these will NOT be modified"
+else
+  info "No Windows partitions detected"
+fi
 
-# Extract free spaces for selection
-mapfile -t FREE_SPACES < <(
-  parted --script "$TARGET_DISK" unit GB print free | awk '
-    BEGIN{IGNORECASE=1}
-    /Free/ {
-      n=0
-      for(i=1;i<=NF;i++){
-        if($i ~ /^[0-9.]+GB$/){
-          n++
-          if(n==1) start=$i
-          else if(n==2) end=$i
+# ============================================================================
+# Main Menu
+# ============================================================================
+
+echo ""
+echo "========================================"
+echo "        Partition Management"
+echo "========================================"
+echo "1) Create new partitions (EFI + ROOT)"
+echo "2) Delete a partition"
+echo "3) Exit"
+echo "========================================"
+read -rp "Enter your choice [1-3]: " choice
+
+case "$choice" in
+  1)
+    # ========================================================================
+    # Create Partitions
+    # ========================================================================
+    
+    echo ""
+    info "Current partition table and free space on $TARGET_DISK:"
+    echo ""
+    parted --script "$TARGET_DISK" unit GB print free || true
+    
+    # Extract free space blocks
+    mapfile -t FREE_SPACES < <(
+      parted --script "$TARGET_DISK" unit GB print free | awk '
+        BEGIN{IGNORECASE=1}
+        /Free/ {
+          n=0
+          for(i=1;i<=NF;i++){
+            if($i ~ /^[0-9.]+GB$/){
+              n++
+              if(n==1) start=$i
+              else if(n==2) end=$i
+            }
+          }
+          gsub("GB","",start)
+          gsub("GB","",end)
+          if(start+0 < end+0) print start":"end
         }
-      }
-      gsub("GB","",start)
-      gsub("GB","",end)
-      if(start+0 < end+0) print start":"end
-    }
-  '
-)
-
-if [ ${#FREE_SPACES[@]} -eq 0 ]; then
-  echo "No free space detected on $TARGET_DISK."
-  exit 1
-fi
-
-echo
-
-
-
-echo "Available free space blocks:"
-
-for i in "${!FREE_SPACES[@]}"; do
-
-  start=$(echo "${FREE_SPACES[$i]}" | cut -d: -f1)
-
-  end=$(echo "${FREE_SPACES[$i]}" | cut -d: -f2)
-
-  size=$(awk "BEGIN {print $end - $start}")
-
-  printf "%2d) Start: %-8s End: %-8s Size: %-8s\n" "$((i+1))" "${start}GB" "${end}GB" "${size}GB"
-
-done
-
-
-
-read -rp "Select the free space block to use (e.g., 1): " choice
-
-if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#FREE_SPACES[@]} )); then
-
-  echo "Invalid selection. Exiting."
-
-  exit 1
-
-fi
-
-
-
-selected_space="${FREE_SPACES[$((choice-1))]}"
-
-free_start=$(echo "$selected_space" | cut -d: -f1)
-
-free_end=$(echo "$selected_space" | cut -d: -f2)
-
-free_size=$(awk "BEGIN {print $free_end - $free_start}")
-
-
-
-echo "You selected a block of ${free_size}GB starting at ${free_start}GB."
-
-
-
-efi_size=""
-
-while true; do
-
-  read -rp "Enter the size for the EFI partition in GB (recommended: 2): " efi_size
-
-  if ! [[ "$efi_size" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-
-    echo "Invalid size. Please enter a number."
-
-    continue
-
-  fi
-
-  if (( $(awk "BEGIN {print ($efi_size > $free_size)}") )); then
-
-    echo "EFI partition size cannot be larger than the available free space (${free_size}GB)."
-
-  else
-
-    break
-
-  fi
-
-done
-
-
-
-EFI_START="$free_start"
-
-EFI_END=$(awk "BEGIN {print $free_start + $efi_size}")
-
-ROOT_START="$EFI_END"
-
-ROOT_END="$free_end"
-
-root_size=$(awk "BEGIN {print $ROOT_END - $ROOT_START}")
-
-
-
-echo
-
-
-
-echo "The following partitions will be created:"
-
-echo "  - EFI Partition:  ${EFI_START}GB - ${EFI_END}GB (${efi_size}GB)"
-
-echo "  - Root Partition: ${ROOT_START}GB - ${ROOT_END}GB (${root_size}GB)"
-
-read -rp "Do you want to continue? (y/N): " confirm
-
-if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-
-  echo "Aborting."
-
-  exit 1
-
-fi
-
-
-
-echo "Creating EFI partition..."
-parted --script "$TARGET_DISK" mkpart "OMARCHY_EFI" fat32 "${EFI_START}GB" "${EFI_END}GB"
-
-echo "Creating root partition..."
-parted --script "$TARGET_DISK" mkpart "OMARCHY_ROOT" btrfs "${ROOT_START}GB" "${ROOT_END}GB"
-
-partprobe "$TARGET_DISK" || true
-sleep 1
-
-efi_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_EFI/ {print $1}')
-root_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_ROOT/ {print $1}')
-
-efi_partition="${TARGET_DISK}p${efi_part_num}"
-root_partition="${TARGET_DISK}p${root_part_num}"
-
-parted --script "$TARGET_DISK" set "$efi_part_num" boot on
-echo "EFI partition: $efi_partition"
-echo "Root partition: $root_partition"
-
-# Format EFI
-echo "Formatting EFI partition ($efi_partition) as FAT32..."
-mkfs.fat -F32 "$efi_partition"
-
-# Encrypt root
-echo "Encrypting root partition ($root_partition) with LUKS2."
-cryptsetup luksFormat "$root_partition"
-cryptsetup luksOpen "$root_partition" cryptroot
-
-# Btrfs
-echo "Creating btrfs on /dev/mapper/cryptroot..."
-mkfs.btrfs -f /dev/mapper/cryptroot
-
-# Mount and create subvolumes
-mount /dev/mapper/cryptroot /mnt
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-btrfs subvolume create /mnt/@var_log
-btrfs subvolume create /mnt/@var_cache_pacman_pkg
-umount /mnt
-
-# Mount subvolumes
-mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
-mkdir -p /mnt/home
-mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
-mkdir -p /mnt/var/log
-mount -o noatime,compress=zstd,subvol=@var_log /dev/mapper/cryptroot /mnt/var/log
-mkdir -p /mnt/var/cache/pacman/pkg
-mount -o noatime,compress=zstd,subvol=@var_cache_pacman_pkg /dev/mapper/cryptroot /mnt/var/cache/pacman/pkg
-
-# Mount EFI
-mkdir -p /mnt/boot
-mount "$efi_partition" /mnt/boot
-
-echo
-echo "Partitions are ready and mounted. You can now run:"
-echo "  archinstall"
-    ;;
-  2)
-    echo "Partitions on $TARGET_DISK:"
-    parted "$TARGET_DISK" print
-    read -rp "Enter the number of the partition to delete: " part_num
-    if ! [[ "$part_num" =~ ^[0-9]+$ ]]; then
-      echo "Invalid partition number."
+      '
+    )
+
+    if [ ${#FREE_SPACES[@]} -eq 0 ]; then
+      error "No free space detected on $TARGET_DISK."
       exit 1
     fi
 
-    PART_PATH="${TARGET_DISK}p${part_num}" # Construct the full partition path
+    echo ""
+    echo "========================================"
+    echo "     Available Free Space Blocks"
+    echo "========================================"
+    for i in "${!FREE_SPACES[@]}"; do
+      start=$(echo "${FREE_SPACES[$i]}" | cut -d: -f1)
+      end=$(echo "${FREE_SPACES[$i]}" | cut -d: -f2)
+      size=$(awk "BEGIN {printf \"%.2f\", $end - $start}")
+      printf "%2d) Start: %7.2fGB | End: %7.2fGB | Size: %7.2fGB\n" \
+        "$((i+1))" "$start" "$end" "$size"
+    done
+    echo "========================================"
 
-    # Check if the partition is mounted
+    read -rp "Select the free space block to use: " space_choice
+    if ! [[ "$space_choice" =~ ^[0-9]+$ ]] || \
+       (( space_choice < 1 || space_choice > ${#FREE_SPACES[@]} )); then
+      error "Invalid selection. Exiting."
+      exit 1
+    fi
+
+    selected_space="${FREE_SPACES[$((space_choice-1))]}"
+    free_start=$(echo "$selected_space" | cut -d: -f1)
+    free_end=$(echo "$selected_space" | cut -d: -f2)
+    free_size=$(awk "BEGIN {printf \"%.2f\", $free_end - $free_start}")
+
+    success "Selected free space: ${free_size}GB (${free_start}GB to ${free_end}GB)"
+
+    # Get EFI size
+    echo ""
+    while true; do
+      read -rp "Enter EFI partition size in GB (minimum 0.5, recommended 2): " efi_size
+      if ! [[ "$efi_size" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        error "Invalid size. Please enter a number."
+        continue
+      fi
+      if (( $(awk "BEGIN {print ($efi_size < 0.5)}") )); then
+        error "EFI partition must be at least 0.5GB"
+        continue
+      fi
+      if (( $(awk "BEGIN {print ($efi_size >= $free_size)}") )); then
+        error "EFI size must be less than available space (${free_size}GB)"
+        continue
+      fi
+      break
+    done
+
+    # Get ROOT size
+    echo ""
+    remaining=$(awk "BEGIN {printf \"%.2f\", $free_size - $efi_size}")
+    info "Remaining space after EFI: ${remaining}GB"
+    
+    while true; do
+      read -rp "Enter ROOT partition size in GB (or 'max' for all remaining): " root_size_input
+      
+      if [[ "$root_size_input" == "max" ]]; then
+        root_size="$remaining"
+        break
+      fi
+      
+      if ! [[ "$root_size_input" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        error "Invalid size. Please enter a number or 'max'."
+        continue
+      fi
+      
+      if (( $(awk "BEGIN {print ($root_size_input < 10)}") )); then
+        error "ROOT partition should be at least 10GB"
+        continue
+      fi
+      
+      if (( $(awk "BEGIN {print ($root_size_input > $remaining)}") )); then
+        error "ROOT size cannot exceed remaining space (${remaining}GB)"
+        continue
+      fi
+      
+      root_size="$root_size_input"
+      break
+    done
+
+    # Calculate partition boundaries
+    EFI_START="$free_start"
+    EFI_END=$(awk "BEGIN {printf \"%.2f\", $free_start + $efi_size}")
+    ROOT_START="$EFI_END"
+    ROOT_END=$(awk "BEGIN {printf \"%.2f\", $ROOT_START + $root_size}")
+
+    # Verify order (EFI must come before ROOT)
+    if (( $(awk "BEGIN {print ($EFI_START >= $ROOT_START)}") )); then
+      error "Internal error: EFI partition must come before ROOT"
+      exit 1
+    fi
+
+    # Confirmation
+    echo ""
+    echo "========================================"
+    echo "       Partition Plan Summary"
+    echo "========================================"
+    printf "EFI Partition:  %7.2fGB to %7.2fGB (%6.2fGB)\n" "$EFI_START" "$EFI_END" "$efi_size"
+    printf "ROOT Partition: %7.2fGB to %7.2fGB (%6.2fGB)\n" "$ROOT_START" "$ROOT_END" "$root_size"
+    echo "========================================"
+    echo ""
+    warn "These partitions will be created but NOT formatted"
+    info "You will use archinstall with pre-mounted configuration next"
+    echo ""
+    read -rp "Continue with partition creation? (y/N): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      info "Operation cancelled."
+      exit 0
+    fi
+
+    # Create partitions
+    echo ""
+    info "Creating EFI partition..."
+    parted --script "$TARGET_DISK" mkpart "ARCH_EFI" fat32 "${EFI_START}GB" "${EFI_END}GB"
+    
+    info "Creating ROOT partition..."
+    parted --script "$TARGET_DISK" mkpart "ARCH_ROOT" ext4 "${ROOT_START}GB" "${ROOT_END}GB"
+    
+    info "Refreshing partition table..."
+    partprobe "$TARGET_DISK" || true
+    sleep 2
+
+    # Find created partitions
+    efi_part_num=$(parted -s "$TARGET_DISK" print | awk '/ARCH_EFI/ {print $1}')
+    root_part_num=$(parted -s "$TARGET_DISK" print | awk '/ARCH_ROOT/ {print $1}')
+
+    if [[ -z "$efi_part_num" ]] || [[ -z "$root_part_num" ]]; then
+      error "Failed to detect created partitions"
+      exit 1
+    fi
+
+    # Construct partition paths (handle nvme vs sda naming)
+    if [[ "$TARGET_DISK" =~ nvme ]]; then
+      efi_partition="${TARGET_DISK}p${efi_part_num}"
+      root_partition="${TARGET_DISK}p${root_part_num}"
+    else
+      efi_partition="${TARGET_DISK}${efi_part_num}"
+      root_partition="${TARGET_DISK}${root_part_num}"
+    fi
+
+    # Set ESP flag on EFI partition
+    info "Setting ESP flag on EFI partition..."
+    parted --script "$TARGET_DISK" set "$efi_part_num" esp on
+
+    # Final verification
+    echo ""
+    success "Partitions created successfully!"
+    echo ""
+    echo "========================================"
+    echo "        Created Partitions"
+    echo "========================================"
+    echo "EFI Partition:  $efi_partition  (partition #$efi_part_num)"
+    echo "ROOT Partition: $root_partition (partition #$root_part_num)"
+    echo "========================================"
+    success "✓ EFI comes BEFORE ROOT in disk layout (${EFI_START}GB < ${ROOT_START}GB)"
+    info "Note: Partition numbers are assigned by existing layout"
+    info "What matters is physical position, not the number"
+    echo ""
+    lsblk "$TARGET_DISK"
+    echo ""
+    
+    success "Setup complete! Next steps:"
+    echo ""
+    echo "1. Run archinstall with the following options:"
+    echo "   - Choose 'Pre-mounted configuration'"
+    echo "   - EFI partition: $efi_partition"
+    echo "   - ROOT partition: $root_partition"
+    echo ""
+    echo "2. Or manually format and mount:"
+    echo "   mkfs.fat -F32 $efi_partition"
+    echo "   cryptsetup luksFormat $root_partition"
+    echo "   cryptsetup luksOpen $root_partition cryptroot"
+    echo "   mkfs.btrfs /dev/mapper/cryptroot"
+    echo "   mount /dev/mapper/cryptroot /mnt"
+    echo "   # Create btrfs subvolumes as needed"
+    echo "   mount $efi_partition /mnt/boot"
+    echo ""
+    ;;
+
+  2)
+    # ========================================================================
+    # Delete Partition
+    # ========================================================================
+    
+    echo ""
+    info "Current partitions on $TARGET_DISK:"
+    echo ""
+    parted "$TARGET_DISK" print
+    echo ""
+    
+    read -rp "Enter the partition NUMBER to delete (e.g., 3): " part_num
+    if ! [[ "$part_num" =~ ^[0-9]+$ ]]; then
+      error "Invalid partition number."
+      exit 1
+    fi
+
+    # Construct partition path
+    if [[ "$TARGET_DISK" =~ nvme ]]; then
+      PART_PATH="${TARGET_DISK}p${part_num}"
+    else
+      PART_PATH="${TARGET_DISK}${part_num}"
+    fi
+
+    if [ ! -b "$PART_PATH" ]; then
+      error "Partition $PART_PATH does not exist."
+      exit 1
+    fi
+
+    # Check if protected
+    if [[ -n "${PROTECTED_PARTS[$PART_PATH]:-}" ]]; then
+      error "Partition $PART_PATH is protected: ${PROTECTED_PARTS[$PART_PATH]}"
+      error "This appears to be a Windows partition and will NOT be deleted."
+      exit 1
+    fi
+
+    # Check if mounted
     MOUNT_POINT=$(findmnt -n -o TARGET --source "$PART_PATH" 2>/dev/null || true)
     if [[ -n "$MOUNT_POINT" ]]; then
-      echo "Partition $PART_PATH is currently mounted at $MOUNT_POINT."
-      read -rp "Attempt to unmount $PART_PATH? (y/N): " unmount_confirm
-      if [[ "$unmount_confirm" == "y" || "$unmount_confirm" == "Y" ]]; then
-        echo "Unmounting $PART_PATH..."
+      warn "Partition $PART_PATH is mounted at: $MOUNT_POINT"
+      read -rp "Unmount $PART_PATH? (y/N): " unmount_confirm
+      if [[ "$unmount_confirm" =~ ^[Yy]$ ]]; then
+        info "Unmounting $PART_PATH..."
         if ! umount "$PART_PATH"; then
-          echo "Failed to unmount $PART_PATH. Aborting deletion."
+          error "Failed to unmount $PART_PATH. Cannot proceed."
           exit 1
         fi
-        echo "$PART_PATH unmounted successfully."
+        success "$PART_PATH unmounted successfully."
       else
-        echo "Aborting deletion. Partition must be unmounted first."
+        error "Partition must be unmounted before deletion."
         exit 1
       fi
     fi
 
-    read -rp "Are you sure you want to delete partition $part_num on $TARGET_DISK? This is irreversible. (y/N): " confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-      parted --script "$TARGET_DISK" rm "$part_num"
-      echo "Partition $part_num deleted."
-    else
-      echo "Aborting."
+    # Final confirmation
+    echo ""
+    warn "You are about to DELETE partition $part_num on $TARGET_DISK"
+    warn "Path: $PART_PATH"
+    warn "This operation is IRREVERSIBLE!"
+    echo ""
+    read -rp "Type 'DELETE' to confirm: " confirm
+    
+    if [[ "$confirm" != "DELETE" ]]; then
+      info "Deletion cancelled."
+      exit 0
     fi
+
+    info "Deleting partition $part_num..."
+    parted --script "$TARGET_DISK" rm "$part_num"
+    partprobe "$TARGET_DISK" || true
+    sleep 1
+    
+    success "Partition $part_num deleted."
+    echo ""
+    lsblk "$TARGET_DISK"
     ;;
+
+  3)
+    info "Exiting."
+    exit 0
+    ;;
+
   *)
-    echo "Invalid choice. Exiting."
+    error "Invalid choice. Exiting."
     exit 1
     ;;
 esac
-
-
