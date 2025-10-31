@@ -1,4 +1,5 @@
 #!/bin/bash
+#v1
 
 set -e
 
@@ -56,13 +57,6 @@ detect_windows_partitions() {
     printf '%s\n' "${windows_parts[@]}"
 }
 
-# Get free space on disk
-get_free_space() {
-    local disk=$1
-    # Get last free space region in sectors (simplified)
-    parted -s "$disk" print free 2>/dev/null | grep "Free Space" | tail -1 | awk '{print $1, $3}'
-}
-
 # Create partitions
 create_partitions() {
     local disk=$1
@@ -72,7 +66,7 @@ create_partitions() {
     
     if [ "$has_windows" = "true" ]; then
         log_warn "Windows partitions detected - using free space only"
-        # Use gdisk to create partitions in free space
+        # Use sgdisk to create partitions in free space
         local free_start=$(parted -s "$disk" print free | grep "Free Space" | tail -1 | awk '{print $2}' | sed 's/s//')
         local free_end=$(parted -s "$disk" print free | grep "Free Space" | tail -1 | awk '{print $3}' | sed 's/s//')
         
@@ -166,7 +160,7 @@ configure_system() {
     # Set hostname
     echo "$hostname" > /mnt/etc/hostname
     
-    # Set timezone (you can modify this)
+    # Set timezone
     arch-chroot /mnt ln -sf /usr/share/zoneinfo/UTC /etc/localtime
     arch-chroot /mnt hwclock --systohc
     
@@ -196,18 +190,57 @@ configure_system() {
 install_limine() {
     local disk=$1
     local efi_part=$2
+    local root_part=$3
     
     log_info "Installing Limine bootloader..."
     
     # Install limine package
     arch-chroot /mnt pacman -S --noconfirm limine efibootmgr
     
+    # Get partition UUIDs
+    local efi_uuid=$(blkid -s PARTUUID -o value "$efi_part")
+    local root_uuid=$(blkid -s PARTUUID -o value "$root_part")
+    
     # Copy Limine EFI to ESP
     arch-chroot /mnt mkdir -p /boot/EFI/limine
     arch-chroot /mnt cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
     
-    # Get EFI partition number (e.g., 1 from /dev/nvme0n1p1)
-    local efi_num=$(echo "$efi_part" | grep -oE '[0-9]+
+    # Create limine.conf
+    cat > /mnt/boot/limine.conf << 'EOF'
+TIMEOUT=3
+
+:Arch Linux
+PROTOCOL=limine
+KERNEL_PARTITION_UUID=
+KERNEL_PATH=/boot/vmlinuz-linux
+MODULE_PATH=/boot/initramfs-linux.img
+KERNEL_CMDLINE=root=PARTUUID= rw
+EOF
+    
+    # Update limine.conf with actual UUIDs
+    sed -i "s|KERNEL_PARTITION_UUID=|KERNEL_PARTITION_UUID=$root_uuid|g" /mnt/boot/limine.conf
+    sed -i "s|KERNEL_CMDLINE=root=PARTUUID=|KERNEL_CMDLINE=root=PARTUUID=$root_uuid|g" /mnt/boot/limine.conf
+    
+    # Create UEFI boot entry
+    arch-chroot /mnt efibootmgr --create --disk "$disk" --label "Limine" \
+        --loader '\EFI\limine\BOOTX64.EFI' --unicode
+    
+    log_info "Limine installed and deployed"
+}
+
+# Install AUR packages
+install_aur_packages() {
+    local username=$1
+    
+    log_info "Installing yay AUR helper..."
+    arch-chroot /mnt pacman -S --noconfirm git base-devel
+    arch-chroot /mnt sudo -u "$username" git clone https://aur.archlinux.org/yay.git /tmp/yay
+    arch-chroot /mnt sudo -u "$username" bash -c "cd /tmp/yay && makepkg -si --noconfirm"
+    
+    # Install AUR packages for Limine
+    log_info "Installing Limine AUR packages..."
+    arch-chroot /mnt sudo -u "$username" yay -S --noconfirm limine-snapper-sync limine-mkinitcpio-hook
+}
 
 # Get user input
 get_user_input() {
@@ -277,90 +310,7 @@ main() {
     generate_fstab
     configure_system "$USERNAME" "$PASSWORD" "$HOSTNAME"
     install_limine "$DISK" "$EFI_PART" "$ROOT_PART"
-    
-    log_info "Installation complete!"
-    log_info "Mounted at /mnt - use 'arch-chroot /mnt' to enter"
-    log_info "Run 'reboot' when finished"
-}
-
-main "$@")
-    
-    # Create UEFI boot entry
-    arch-chroot /mnt efibootmgr --create --disk "$disk" --part "$efi_num" \
-        --label "Arch Linux Limine Bootloader" \
-        --loader '\EFI\limine\BOOTX64.EFI' --unicode
-    
-    log_info "Limine installed and deployed"
-}
-
-# Get user input
-get_user_input() {
-    read -p "Enter username: " USERNAME
-    if [ -z "$USERNAME" ]; then
-        log_error "Username cannot be empty"
-        exit 1
-    fi
-    
-    read -sp "Enter password: " PASSWORD
-    echo
-    if [ -z "$PASSWORD" ]; then
-        log_error "Password cannot be empty"
-        exit 1
-    fi
-    
-    read -p "Enter hostname (default: arch): " HOSTNAME
-    HOSTNAME=${HOSTNAME:-arch}
-}
-
-# Main installation
-main() {
-    log_info "=== Arch Linux Installation Script ==="
-    
-    # Check if running as root
-    if [ "$EUID" -ne 0 ]; then
-        log_error "This script must be run as root"
-        exit 1
-    fi
-    
-    # Detect and select disk
-    detect_disks
-    DISK=$(select_disk)
-    
-    # Detect Windows partitions
-    WINDOWS_PARTS=$(detect_windows_partitions "$DISK")
-    if [ -n "$WINDOWS_PARTS" ]; then
-        log_warn "Found Windows partitions:"
-        echo "$WINDOWS_PARTS"
-        HAS_WINDOWS="true"
-    else
-        log_info "No Windows partitions detected"
-        HAS_WINDOWS="false"
-    fi
-    
-    # Get user input
-    get_user_input
-    
-    # Confirm before proceeding
-    echo ""
-    log_warn "This will modify $DISK"
-    log_warn "Username: $USERNAME"
-    log_warn "Hostname: $HOSTNAME"
-    log_warn "Windows protected: $HAS_WINDOWS"
-    read -p "Continue? (yes/no): " confirm
-    if [ "$confirm" != "yes" ]; then
-        log_info "Installation cancelled"
-        exit 0
-    fi
-    
-    # Installation steps
-    create_partitions "$DISK" "$HAS_WINDOWS"
-    get_partitions "$DISK"
-    format_partitions
-    mount_partitions
-    install_base
-    generate_fstab
-    configure_system "$USERNAME" "$PASSWORD" "$HOSTNAME"
-    install_limine "$DISK"
+    install_aur_packages "$USERNAME"
     
     log_info "Installation complete!"
     log_info "Mounted at /mnt - use 'arch-chroot /mnt' to enter"
