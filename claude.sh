@@ -1,5 +1,4 @@
 #!/bin/bash
-#v1
 
 set -e
 
@@ -101,14 +100,23 @@ create_partitions() {
 # Get partition names
 get_partitions() {
     local disk=$1
-    local parts=($(lsblk -npo NAME "$disk" | tail -n +2))
+    local parts=()
+    
+    # Get all partitions for this disk
+    while IFS= read -r part; do
+        if [ -n "$part" ]; then
+            parts+=("$part")
+        fi
+    done < <(lsblk -npo NAME "$disk" | tail -n +2)
     
     # Assume last two partitions are EFI and ROOT
     if [ ${#parts[@]} -ge 2 ]; then
         EFI_PART="${parts[-2]}"
         ROOT_PART="${parts[-1]}"
+        log_info "EFI partition: $EFI_PART"
+        log_info "ROOT partition: $ROOT_PART"
     else
-        log_error "Could not identify partitions"
+        log_error "Could not identify partitions. Found: ${parts[@]}"
         exit 1
     fi
 }
