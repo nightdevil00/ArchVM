@@ -336,24 +336,10 @@ LIMINE_WINDOWS
 fi
 
 
-# Configure Snapper
-if ! snapper list-configs 2>/dev/null | grep -q "root"; then
-  snapper -c root create-config /
-fi
-
-if ! snapper list-configs 2>/dev/null | grep -q "home"; then
-  snapper -c home create-config /home
-fi
-
-# Tweak default Snapper configs
-sed -i 's/^TIMELINE_CREATE="yes"/TIMELINE_CREATE="no"/' /etc/snapper/configs/{root,home}
-sed -i 's/^NUMBER_LIMIT="50"/NUMBER_LIMIT="5"/' /etc/snapper/configs/{root,home}
-sed -i 's/^NUMBER_LIMIT_IMPORTANT="10"/NUMBER_LIMIT_IMPORTANT="5"/' /etc/snapper/configs/{root,home}
 
 # enable NetworkManager (optional)
 systemctl enable NetworkManager
-systemctl enable snapper-timeline.timer
-systemctl enable snapper-cleanup.timer
+
 
 # cleanup
 rm -f /arch_install_vars.sh
