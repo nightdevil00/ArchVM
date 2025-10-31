@@ -74,24 +74,16 @@ fi
 
 partprobe "$TARGET_DISK"; sync; sleep 3
 
-# --- Detect partitions ---
-EFI_PART=""
-ROOT_PART=""
-while IFS= read -r part; do
-  [[ -z "$part" ]] && continue
-  FSTYPE=$(blkid -s TYPE -o value "$part" 2>/dev/null || true)
-  case "$FSTYPE" in
-    vfat|fat32) EFI_PART="$part" ;;
-    btrfs)      ROOT_PART="$part" ;;
-  esac
-done < <(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}')
+# --- Partition devices ---
+if [[ "$TARGET_DISK" == *nvme* ]]; then
+  EFI_DEV="${TARGET_DISK}p1"
+  ROOT_DEV="${TARGET_DISK}p2"
+else
+  EFI_DEV="${TARGET_DISK}1"
+  ROOT_DEV="${TARGET_DISK}2"
+fi
 
-[[ -z "$EFI_PART" || -z "$ROOT_PART" ]] && { echo "Partition detection failed"; exit 1; }
-efi_partition="$EFI_PART"
-root_partition="$ROOT_PART"
-echo "EFI: $efi_partition | Root: $root_partition"
-
-# --- Encryption ---
+# --- 1. LUKS ON RAW PARTITION (FIXED) ---
 while true; do
   read -rsp "LUKS passphrase: " LUKS_PASS; echo
   read -rsp "Confirm: " LUKS_PASS2; echo
@@ -99,11 +91,20 @@ while true; do
   echo "Mismatch. Try again."
 done
 
-printf "YES\n%s" "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --batch-mode "$root_partition"
-printf "%s" "$LUKS_PASS" | cryptsetup open "$root_partition" cryptroot
+if ! printf "%s" "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --batch-mode --force-password "$ROOT_DEV" -; then
+  echo "LUKS FORMAT FAILED. Is the disk write-protected?"
+  exit 1
+fi
 
-# --- Btrfs ---
+if ! printf "%s" "$LUKS_PASS" | cryptsetup open "$ROOT_DEV" cryptroot; then
+  echo "LUKS OPEN FAILED. Wrong passphrase?"
+  exit 1
+fi
+
+# --- 2. BTRFS ON LUKS ---
 mkfs.btrfs -f -O '^encrypt' /dev/mapper/cryptroot
+
+# --- Subvolumes ---
 mount /dev/mapper/cryptroot /mnt
 for sub in @ @home @snapshots @log @swap; do
   btrfs subvolume create "/mnt/$sub"
@@ -124,19 +125,24 @@ RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile)
 umount /mnt/swap
 
 # --- EFI ---
-mkfs.fat -F32 "$efi_partition"
-mount "$efi_partition" /mnt/boot
+mkfs.fat -F32 "$EFI_DEV"
+mount "$EFI_DEV" /mnt/boot
+
+# --- Final variables ---
+ROOT_PART="$ROOT_DEV"
+EFI_PART="$EFI_DEV"
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+echo "EFI: $EFI_PART | Root: $ROOT_PART | UUID: $ROOT_UUID"
 
 # --- Reflector (fast mirrors) ---
 reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
 
 # --- Install base system ---
 pacstrap /mnt base linux linux-firmware sudo networkmanager btrfs-progs iwd git limine efibootmgr binutils \
-         amd-ucode intel-ucode zram-generator plymouth snapper grub-btrfs
+         amd-ucode intel-ucode zram-generator plymouth snapper
 
-# --- fstab + crypttab ---
+# --- fstab + crypttab (FIXED) ---
 genfstab -U /mnt >> /mnt/etc/fstab
-ROOT_UUID=$(blkid -s UUID -o value "$root_partition")
 echo "cryptroot UUID=$ROOT_UUID none luks,discard" >> /mnt/etc/crypttab
 
 # --- User input ---
@@ -149,7 +155,6 @@ cat > /mnt/setup.sh <<EOF
 #!/usr/bin/bash
 set -euo pipefail
 
-# Variables
 ROOT_UUID="$ROOT_UUID"
 RESUME_OFFSET="$RESUME_OFFSET"
 USERNAME="$username"
@@ -200,11 +205,12 @@ ZRAM
 plymouth-set-default-theme -R spinner
 
 # Snapper
-snapper -c root create-config /
-snapper -c home create-config /home
-btrfs subvolume delete /.snapshots
+umount /.snapshots 2>/dev/null || true
+btrfs subvolume delete /.snapshots 2>/dev/null || true
 btrfs subvolume create /.snapshots
 chmod 750 /.snapshots
+snapper -c root create-config /
+snapper -c home create-config /home
 systemctl enable snapper-timeline.timer snapper-cleanup.timer
 
 # Limine
@@ -240,7 +246,7 @@ chmod +x /mnt/setup.sh
 arch-chroot /mnt /setup.sh
 rm /mnt/setup.sh
 
-# --- Final ---
+# --- Final cleanup ---
 umount -R /mnt
 swapoff -a
 cryptsetup luksClose cryptroot
