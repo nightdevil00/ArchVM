@@ -65,22 +65,13 @@ create_partitions() {
     
     if [ "$has_windows" = "true" ]; then
         log_warn "Windows partitions detected - using free space only"
-        # Use sgdisk to create partitions in free space
-        local free_start=$(parted -s "$disk" print free | grep "Free Space" | tail -1 | awk '{print $2}' | sed 's/s//')
-        local free_end=$(parted -s "$disk" print free | grep "Free Space" | tail -1 | awk '{print $3}' | sed 's/s//')
-        
-        # Create EFI (2G)
-        sgdisk -n 0:${free_start}s:+2G -t 0:ef00 "$disk"
-        
-        # Create ROOT (rest of free space)
-        sgdisk -n 0:0:${free_end}s -t 0:8300 "$disk"
+        sgdisk -n 0:0:+2G -t 0:ef00 "$disk"
+        sgdisk -n 0:0:0 -t 0:8300 "$disk"
     else
         log_info "No Windows partitions - using full disk"
         
-        # Clear partition table
-        sgdisk -Z "$disk"
-        
-        # Create GPT
+        # Clear and create new partition table
+        sgdisk -Z "$disk" 2>/dev/null || true
         sgdisk -og "$disk"
         
         # Create EFI partition (2G)
@@ -91,8 +82,12 @@ create_partitions() {
     fi
     
     # Reload partition table
-    partprobe "$disk"
-    sleep 1
+    partprobe "$disk" 2>/dev/null || true
+    sleep 2
+    
+    # List created partitions for debugging
+    log_info "Partitions created. Current state:"
+    lsblk "$disk"
     
     log_info "Partitions created successfully"
 }
@@ -125,7 +120,20 @@ get_partitions() {
 format_partitions() {
     log_info "Formatting partitions..."
     
+    if [ ! -b "$EFI_PART" ]; then
+        log_error "EFI partition not found: $EFI_PART"
+        exit 1
+    fi
+    
+    if [ ! -b "$ROOT_PART" ]; then
+        log_error "ROOT partition not found: $ROOT_PART"
+        exit 1
+    fi
+    
+    log_info "Formatting $EFI_PART as FAT32..."
     mkfs.fat -F 32 "$EFI_PART"
+    
+    log_info "Formatting $ROOT_PART as ext4..."
     mkfs.ext4 -F "$ROOT_PART"
     
     log_info "Partitions formatted"
