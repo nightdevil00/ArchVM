@@ -104,25 +104,19 @@ fi
 # --- 2. BTRFS ON LUKS ---
 mkfs.btrfs -f /dev/mapper/cryptroot
 
+
 # --- Subvolumes ---
 mount /dev/mapper/cryptroot /mnt
-for sub in @ @home @snapshots @log @swap; do
+for sub in @ @home @snapshots @log; do
   btrfs subvolume create "/mnt/$sub"
 done
 umount /mnt
 
 mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
-mkdir -p /mnt/{home,.snapshots,var/log,swap,boot}
+mkdir -p /mnt/{home,.snapshots,var/log,boot}
 mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
 mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
 mount -o noatime,compress=zstd,subvol=@log /dev/mapper/cryptroot /mnt/var/log
-
-# --- Swapfile ---
-mount -o subvol=@swap /dev/mapper/cryptroot /mnt/swap
-btrfs filesystem mkswapfile --size 4g /mnt/swap/swapfile
-swapon /mnt/swap/swapfile
-RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile)
-umount /mnt/swap
 
 # --- EFI ---
 mkfs.fat -F32 "$EFI_DEV"
@@ -131,8 +125,13 @@ mount "$EFI_DEV" /mnt/boot
 # --- Final variables ---
 ROOT_PART="$ROOT_DEV"
 EFI_PART="$EFI_DEV"
+ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT_PART")
+EFI_PARTUUID=$(blkid -s PARTUUID -o value "$EFI_PART")
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
-echo "EFI: $EFI_PART | Root: $ROOT_PART | UUID: $ROOT_UUID"
+EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+
+echo "EFI: $EFI_PART | UUID: $EFI_UUID | PARTUUID: $EFI_PARTUUID"
+echo "ROOT: $ROOT_PART | UUID: $ROOT_UUID | PARTUUID: $ROOT_PARTUUID"
 
 # --- Reflector (fast mirrors) ---
 reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
@@ -143,7 +142,8 @@ pacstrap /mnt base linux linux-firmware sudo networkmanager btrfs-progs iwd git 
 
 # --- fstab + crypttab (FIXED) ---
 genfstab -U /mnt >> /mnt/etc/fstab
-echo "cryptroot UUID=$ROOT_UUID none luks,discard" >> /mnt/etc/crypttab
+echo "cryptroot PARTUUID=$ROOT_PARTUUID none luks,discard" >> /mnt/etc/crypttab
+
 
 # --- User input ---
 read -rp "Username: " username
@@ -155,8 +155,8 @@ cat > /mnt/setup.sh <<EOF
 #!/usr/bin/bash
 set -euo pipefail
 
-ROOT_UUID="$ROOT_UUID"
-RESUME_OFFSET="$RESUME_OFFSET"
+ROOT_PARTUUID="$ROOT_PARTUUID"
+EFI_PARTUUID="$EFI_PARTUUID"
 USERNAME="$username"
 USER_PASS="$user_pass"
 ROOT_PASS="$root_pass"
@@ -187,13 +187,6 @@ sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystem
 echo 'COMPRESSION="zstd"' >> /etc/mkinitcpio.conf
 mkinitcpio -P
 
-# Microcode
-if grep -q AMD /proc/cpuinfo; then
-  cp /boot/amd-ucode.img /boot/
-elif grep -q Intel /proc/cpuinfo; then
-  cp /boot/intel-ucode.img /boot/
-fi
-
 # ZRAM
 cat > /etc/systemd/zram-generator.conf <<ZRAM
 [zram0]
@@ -204,53 +197,36 @@ ZRAM
 # Plymouth
 plymouth-set-default-theme -R spinner
 
-# Snapper
-umount /.snapshots 2>/dev/null || true
-btrfs subvolume delete /.snapshots 2>/dev/null || true
-btrfs subvolume create /.snapshots
-chmod 750 /.snapshots
-snapper -c root create-config /
-snapper -c home create-config /home
-systemctl enable snapper-timeline.timer snapper-cleanup.timer
-
 # Limine
 mkdir -p /boot/limine
 cp /usr/share/limine/limine-bios.sys /boot/limine/
 cp /usr/share/limine/BOOTX64.EFI /boot/
 
-cat > /boot/limine.cfg <<LIM
-TIMEOUT=5
+cat > /boot/limine.conf <<LIM
+timeout: 5
 
-Arch Linux
-    PROTOCOL=linux
-    KERNEL_PATH=boot:///vmlinuz-linux
-    CMDLINE=root=UUID=\$ROOT_UUID rw rootflags=subvol=@ cryptdevice=UUID=\$ROOT_UUID:cryptroot resume=UUID=\$ROOT_UUID resume_offset=\$RESUME_OFFSET quiet splash
-    MODULE_PATH=boot:///initramfs-linux.img
+/Arch Linux (linux)
+    protocol: efi
+    path: boot():/vmlinuz-linux
+    initrd: boot():/initramfs-linux.img
+    cmdline: cryptdevice=PARTUUID=\$ROOT_PARTUUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs zswap.enabled=0
 
-Arch Linux (fallback)
-    PROTOCOL=linux
-    KERNEL_PATH=boot:///vmlinuz-linux
-    CMDLINE=root=UUID=\$ROOT_UUID rw rootflags=subvol=@ cryptdevice=UUID=\$ROOT_UUID:cryptroot resume=UUID=\$ROOT_UUID resume_offset=\$RESUME_OFFSET quiet splash
-    MODULE_PATH=boot:///initramfs-linux-fallback.img
+/Arch Linux (linux-fallback)
+    protocol: efi
+    path: boot():/vmlinuz-linux
+    initrd: boot():/initramfs-linux-fallback.img
+    cmdline: cryptdevice=PARTUUID=\$ROOT_PARTUUID:cryptroot root=/dev/mapper/cryptroot rw rootflags=subvol=@ rootfstype=btrfs zswap.enabled=0
 LIM
 
-limine-deploy /boot/limine.cfg
-efibootmgr --create --disk "$TARGET_DISK" --part 1 --label "Arch Linux (Limine)" --loader '\\limine\\BOOTX64.EFI'
 
 # Services
-systemctl enable NetworkManager snapper-timeline.timer snapper-cleanup.timer
-
+systemctl enable NetworkManager
 EOF
 
 chmod +x /mnt/setup.sh
 arch-chroot /mnt /setup.sh
 rm /mnt/setup.sh
 
-# --- Final cleanup ---
-umount -R /mnt
-swapoff -a
-cryptsetup luksClose cryptroot
-rm -rf "$TMP_MOUNT"
 
 echo "Installation complete!"
 echo "Reboot → select 'Arch Linux (Limine)' in UEFI"
