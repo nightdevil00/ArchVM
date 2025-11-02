@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# This script applies the Omarchy GTK theme to Nautilus.
+
+# Source and destination paths
+SOURCE_THEME="$HOME/.config/omarchy/current/theme/gtk.css"
+DEST_GTK4_DIR="$HOME/.config/gtk-4.0"
+DEST_THEME="$DEST_GTK4_DIR/gtk.css"
+
+# Create the GTK-4.0 directory if it doesn't exist
+mkdir -p "$DEST_GTK4_DIR"
+
+# Copy the theme file
+if [ -f "$SOURCE_THEME" ]; then
+    cp "$SOURCE_THEME" "$DEST_THEME"
+    echo "Theme copied successfully."
+else
+    echo "Source theme file not found: $SOURCE_THEME"
+    exit 1
+fi
+
+# Restart Nautilus to apply the changes
+pkill nautilus
+echo "Nautilus restarted."

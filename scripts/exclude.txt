@@ -1,0 +1,9 @@
+google-chrome/
+chromium/
+SingletonLock
+SingletonCookie
+steam/
+Steam/
+nvim/
+eza/
+vesktop/
