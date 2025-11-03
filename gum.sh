@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Arch Linux Full Installer – Dualboot + Limine + Encryption + Snapper + Plymouth
-# Windows-safe dualboot (creates separate Arch EFI)
 # Production-Ready Version (2025) + Gum
 # ==============================================================================
 
@@ -17,9 +16,9 @@ LOG_FILE="/tmp/arch_install_$(date +%Y%m%d_%H%M%S).log"
 TMP_MOUNT="/mnt/__tmp"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
-echo "📘 Logging to: $LOG_FILE"
+gum style "📘 Logging to: $LOG_FILE" --foreground blue --bold
 
-[[ $EUID -eq 0 ]] || { echo "Run as root."; exit 1; }
+[[ $EUID -eq 0 ]] || { gum style "❌ Run as root." --foreground red; exit 1; }
 
 mkdir -p "$TMP_MOUNT"
 
@@ -34,11 +33,30 @@ LUKS_UUID=""
 # Cleanup
 # ==============================================================================
 cleanup() {
-    echo "🧹 Cleaning up..."
+    gum style "🧹 Cleaning up..." --foreground yellow
     umount -R /mnt 2>/dev/null || true
     umount "$TMP_MOUNT" 2>/dev/null || true
     cryptsetup luksClose root 2>/dev/null || true
     rm -rf "$TMP_MOUNT"
+}
+
+# ==============================================================================
+# Format a list for gum choose (truncate & align)
+# ==============================================================================
+format_gum_list() {
+    local -n arr=$1
+    local formatted=()
+    for item in "${arr[@]}"; do
+        # Truncate long fields
+        dev=$(echo "$item" | awk '{print $1}')
+        size=$(echo "$item" | awk '{print $2}')
+        model=$(echo "$item" | awk '{print $3}')
+        [[ ${#model} -gt 12 ]] && model="${model:0:12}..."
+        tran=$(echo "$item" | awk '{print $4}')
+        [[ ${#tran} -gt 5 ]] && tran="${tran:0:5}"
+        formatted+=("$(printf '%-10s | %-7s | %-12s | %-5s' "$dev" "$size" "$model" "$tran")")
+    done
+    echo "${formatted[@]}"
 }
 
 # ==============================================================================
@@ -47,7 +65,7 @@ cleanup() {
 select_disk() {
     if [[ -n "${AUTO_DISK:-}" ]]; then
         TARGET_DISK="$AUTO_DISK"
-        echo "⚙️  Using AUTO_DISK=$TARGET_DISK"
+        gum style "⚙️  Using AUTO_DISK=$TARGET_DISK" --foreground green
         return
     fi
 
@@ -64,19 +82,15 @@ select_disk() {
         DEV_TRAN["$devpath"]="${TRAN:-unknown}"
     done < <(lsblk -P -o NAME,TYPE,SIZE,MODEL,TRAN)
 
-    # Prepare formatted disk options for gum
-    DISK_OPTIONS=()
+    DISK_RAW=()
     for dev in "${DEVICES[@]}"; do
-        size="${DEV_SIZE[$dev]}"
-        model="${DEV_MODEL[$dev]}"
-        [[ ${#model} -gt 15 ]] && model="${model:0:12}..."  # truncate long model
-        tran="${DEV_TRAN[$dev]}"
-        DISK_OPTIONS+=("$(printf '%-10s | %-6s | %-15s | %-5s' "$dev" "$size" "$model" "$tran")")
+        DISK_RAW+=("$dev ${DEV_SIZE[$dev]} ${DEV_MODEL[$dev]} ${DEV_TRAN[$dev]}")
     done
 
-    CHOICE=$(gum choose "${DISK_OPTIONS[@]}" --height 6 --cursor "→" --header "Select disk:")
+    FORMATTED_DISKS=($(format_gum_list DISK_RAW))
+    CHOICE=$(gum choose "${FORMATTED_DISKS[@]}" --height 6 --cursor "→" --header "Select disk:")
     TARGET_DISK=$(echo "$CHOICE" | awk '{print $1}')
-    echo "Selected: $TARGET_DISK"
+    gum style "Selected: $TARGET_DISK" --foreground green
 }
 
 # ==============================================================================
@@ -92,7 +106,7 @@ partition_disk() {
     done | head -n1)
 
     if [[ -n "$WIN_EFI_DEV" ]]; then
-        echo "💠 Windows EFI detected on $WIN_EFI_DEV → leaving it untouched"
+        gum style "💠 Windows EFI detected on $WIN_EFI_DEV → leaving it untouched" --foreground cyan
         parted --script "$TARGET_DISK" unit GB print free
 
         EFI_START=$(gum input --placeholder "Enter start of new EFI for Arch (e.g. 1GB)")
@@ -104,7 +118,7 @@ partition_disk() {
         EFI_PART_NUM=$((LAST_NUM + 1))
         ROOT_PART_NUM=$((EFI_PART_NUM + 1))
 
-        echo "🧩 Creating Arch EFI as partition $EFI_PART_NUM and root as $ROOT_PART_NUM ..."
+        gum style "🧩 Creating Arch EFI as partition $EFI_PART_NUM and root as $ROOT_PART_NUM ..." --foreground green
         parted --script "$TARGET_DISK" mkpart primary fat32 "$EFI_START" "$EFI_END"
         parted --script "$TARGET_DISK" set "$EFI_PART_NUM" esp on
         parted --script "$TARGET_DISK" name "$EFI_PART_NUM" "ARCH_EFI"
@@ -117,9 +131,7 @@ partition_disk() {
         EFI_DEV="${TARGET_DISK}p${EFI_PART_NUM}"
         ROOT_DEV="${TARGET_DISK}p${ROOT_PART_NUM}"
 
-        echo "✅ Partitions ready:"
-        echo "   • EFI:  $EFI_DEV (part $EFI_PART_NUM)"
-        echo "   • ROOT: $ROOT_DEV"
+        gum style "✅ Partitions ready: EFI: $EFI_DEV, ROOT: $ROOT_DEV" --foreground green
     else
         yn=$(gum confirm "⚠️  Wipe $TARGET_DISK and create new partitions?")
         [[ "$yn" == "true" ]] || exit 0
@@ -137,9 +149,7 @@ partition_disk() {
         EFI_DEV="${TARGET_DISK}p1"
         ROOT_DEV="${TARGET_DISK}p2"
 
-        echo "✅ Partitions ready:"
-        echo "   • EFI:  $EFI_DEV (part 1)"
-        echo "   • ROOT: $ROOT_DEV"
+        gum style "✅ Partitions ready: EFI: $EFI_DEV, ROOT: $ROOT_DEV" --foreground green
     fi
 }
 
@@ -147,16 +157,12 @@ partition_disk() {
 # Encryption + Btrfs setup
 # ==============================================================================
 setup_encryption_btrfs() {
-    if [[ -n "${AUTO_LUKS_PASS:-}" ]]; then
-        LUKS_PASS="$AUTO_LUKS_PASS"
-    else
-        while true; do
-            LUKS_PASS=$(gum input --password --placeholder "Enter LUKS passphrase")
-            LUKS_PASS2=$(gum input --password --placeholder "Confirm passphrase")
-            [[ "$LUKS_PASS" == "$LUKS_PASS2" ]] && break
-            gum style "❌ Passphrase mismatch, try again." --foreground red
-        done
-    fi
+    while true; do
+        LUKS_PASS=$(gum input --password --placeholder "Enter LUKS passphrase")
+        LUKS_PASS2=$(gum input --password --placeholder "Confirm passphrase")
+        [[ "$LUKS_PASS" == "$LUKS_PASS2" ]] && break
+        gum style "❌ Passphrase mismatch, try again." --foreground red
+    done
 
     printf "%s" "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --batch-mode --force-password "$ROOT_DEV" -
     printf "%s" "$LUKS_PASS" | cryptsetup open "$ROOT_DEV" root
@@ -182,11 +188,11 @@ setup_encryption_btrfs() {
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
     LUKS_UUID=$(cryptsetup luksUUID "$ROOT_DEV")
 
-    echo "EFI: $EFI_DEV | ROOT: $ROOT_DEV | LUKS_UUID=$LUKS_UUID"
+    gum style "EFI: $EFI_DEV | ROOT: $ROOT_DEV | LUKS_UUID=$LUKS_UUID" --foreground green
 }
 
 # ==============================================================================
-# Base system
+# Base system installation
 # ==============================================================================
 install_base_system() {
     pacstrap /mnt base base-devel linux linux-firmware sudo networkmanager btrfs-progs \
@@ -203,10 +209,10 @@ install_base_system() {
 # System configuration inside chroot
 # ==============================================================================
 configure_system() {
-  USERNAME=$(gum input --placeholder "Enter your username")
-  echo "Root and user passwords will be set interactively inside chroot."
+    USERNAME=$(gum input --placeholder "Enter your username")
+    gum style "Root and user passwords will be set inside chroot." --foreground yellow
 
-  cat > /mnt/setup.sh <<EOF
+    cat > /mnt/setup.sh <<EOF
 #!/usr/bin/bash
 set -euo pipefail
 
@@ -273,9 +279,9 @@ LIMINECONF
 systemctl enable NetworkManager iwd bluetooth avahi-daemon firewalld acpid
 EOF
 
-  chmod +x /mnt/setup.sh
-  arch-chroot /mnt /setup.sh || { gum style "❌ Chroot setup failed" --foreground red; exit 1; }
-  rm /mnt/setup.sh
+    chmod +x /mnt/setup.sh
+    arch-chroot /mnt /setup.sh || gum style "❌ Chroot setup failed" --foreground red
+    rm /mnt/setup.sh
 }
 
 # ==============================================================================
