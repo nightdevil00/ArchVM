@@ -96,29 +96,29 @@ if ! printf "%s" "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --batch-mode 
   exit 1
 fi
 
-if ! printf "%s" "$LUKS_PASS" | cryptsetup open "$ROOT_DEV" cryptroot; then
+if ! printf "%s" "$LUKS_PASS" | cryptsetup open "$ROOT_DEV" root; then
   echo "LUKS OPEN FAILED. Wrong passphrase?"
   exit 1
 fi
 
 # --- 2. BTRFS ON LUKS ---
-mkfs.btrfs -f -O '^encrypt' /dev/mapper/cryptroot
+mkfs.btrfs /dev/mapper/root
 
 # --- Subvolumes ---
-mount /dev/mapper/cryptroot /mnt
+mount /dev/mapper/root /mnt
 for sub in @ @home @snapshots @log @swap; do
   btrfs subvolume create "/mnt/$sub"
 done
 umount /mnt
 
-mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
+mount -o noatime,compress=zstd,subvol=@ /dev/mapper/root /mnt
 mkdir -p /mnt/{home,.snapshots,var/log,swap,boot}
-mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
-mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
-mount -o noatime,compress=zstd,subvol=@log /dev/mapper/cryptroot /mnt/var/log
+mount -o noatime,compress=zstd,subvol=@home /dev/mapper/root /mnt/home
+mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/root /mnt/.snapshots
+mount -o noatime,compress=zstd,subvol=@log /dev/mapper/root /mnt/var/log
 
 # --- Swapfile ---
-mount -o subvol=@swap /dev/mapper/cryptroot /mnt/swap
+mount -o subvol=@swap /dev/mapper/root /mnt/swap
 btrfs filesystem mkswapfile --size 4g /mnt/swap/swapfile
 swapon /mnt/swap/swapfile
 RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile)
@@ -134,16 +134,19 @@ EFI_PART="$EFI_DEV"
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 echo "EFI: $EFI_PART | Root: $ROOT_PART | UUID: $ROOT_UUID"
 
+LUKS_UUID=\$(cryptsetup luksUUID $ROOT)
+
 # --- Reflector (fast mirrors) ---
 reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
 
 # --- Install base system ---
-pacstrap /mnt base linux linux-firmware sudo networkmanager btrfs-progs iwd git limine efibootmgr binutils \
-         amd-ucode intel-ucode zram-generator plymouth snapper
+pacstrap /mnt base base-devel linux linux-firmware sudo networkmanager btrfs-progs iwd git limine efibootmgr binutils \
+         amd-ucode intel-ucode zram-generator plymouth snapper cryptsetup reflector vim dhcpcd firewalld bluez bluez-utils acpid avahi rsync bash-completion \
+         pipewire pipewire-alsa pipewire-pulse wireplumber sof-firmware
 
 # --- fstab + crypttab (FIXED) ---
 genfstab -U /mnt >> /mnt/etc/fstab
-echo "cryptroot UUID=$ROOT_UUID none luks,discard" >> /mnt/etc/crypttab
+echo "root UUID=$ROOT_UUID none luks,discard" >> /mnt/etc/crypttab
 
 # --- User input ---
 read -rp "Username: " username
@@ -160,6 +163,7 @@ RESUME_OFFSET="$RESUME_OFFSET"
 USERNAME="$username"
 USER_PASS="$user_pass"
 ROOT_PASS="$root_pass"
+
 
 # Time / Locale
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
@@ -183,7 +187,9 @@ echo "\$USERNAME:\$USER_PASS" | chpasswd
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL$/s/^# //' /etc/sudoers
 
 # Initramfs
-sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block encrypt filesystems keyboard fsck)/' /etc/mkinitcpio.conf
+sed -i 's/^MODULES=.*/MODULES=(btrfs)/' /etc/mkinitcpio.conf
+sed -i 's|^#BINARIES=.*|BINARIES=(/usr/bin/btrfs)|' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
 echo 'COMPRESSION="zstd"' >> /etc/mkinitcpio.conf
 mkinitcpio -P
 
@@ -214,31 +220,37 @@ snapper -c home create-config /home
 systemctl enable snapper-timeline.timer snapper-cleanup.timer
 
 # Limine
-mkdir -p /boot/limine
-cp /usr/share/limine/limine-bios.sys /boot/limine/
-cp /usr/share/limine/BOOTX64.EFI /boot/
+mkdir -p /boot/EFI/limine
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 
-cat > /boot/limine.cfg <<LIM
-TIMEOUT=5
+efibootmgr --create --disk "$TARGET_DISK" --part 1 \
+      --label "Arch Linux Limine Bootloader" \
+      --loader '\\EFI\\limine\\BOOTX64.EFI' \
+      --unicode
+      
+LUKS_UUID=\$(cryptsetup luksUUID $ROOT_PART)     
 
-Arch Linux
-    PROTOCOL=linux
-    KERNEL_PATH=boot:///vmlinuz-linux
-    CMDLINE=root=UUID=\$ROOT_UUID rw rootflags=subvol=@ cryptdevice=UUID=\$ROOT_UUID:cryptroot resume=UUID=\$ROOT_UUID resume_offset=\$RESUME_OFFSET quiet splash
-    MODULE_PATH=boot:///initramfs-linux.img
+cat <<LIMINECONF > /boot/EFI/limine/limine.conf
+timeout: 3
 
-Arch Linux (fallback)
-    PROTOCOL=linux
-    KERNEL_PATH=boot:///vmlinuz-linux
-    CMDLINE=root=UUID=\$ROOT_UUID rw rootflags=subvol=@ cryptdevice=UUID=\$ROOT_UUID:cryptroot resume=UUID=\$ROOT_UUID resume_offset=\$RESUME_OFFSET quiet splash
-    MODULE_PATH=boot:///initramfs-linux-fallback.img
-LIM
+/Arch Linux
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: quiet cryptdevice=UUID=\$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    module_path: boot():/initramfs-linux.img
 
-limine-deploy /boot/limine.cfg
-efibootmgr --create --disk "$TARGET_DISK" --part 1 --label "Arch Linux (Limine)" --loader '\\limine\\BOOTX64.EFI'
+/Arch Linux (fallback)
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: quiet cryptdevice=UUID=\$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    module_path: boot():/initramfs-linux-fallback.img
+LIMINECONF
+
 
 # Services
-systemctl enable NetworkManager snapper-timeline.timer snapper-cleanup.timer
+for s in NetworkManager dhcpcd iwd systemd-networkd systemd-resolved bluetooth cups avahi-daemon firewalld acpid reflector.timer; do
+    systemctl enable $s
+done
 
 EOF
 
@@ -249,7 +261,7 @@ rm /mnt/setup.sh
 # --- Final cleanup ---
 umount -R /mnt
 swapoff -a
-cryptsetup luksClose cryptroot
+cryptsetup luksClose root
 rm -rf "$TMP_MOUNT"
 
 echo "Installation complete!"
