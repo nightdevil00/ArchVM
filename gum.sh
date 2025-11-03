@@ -64,16 +64,18 @@ select_disk() {
         DEV_TRAN["$devpath"]="${TRAN:-unknown}"
     done < <(lsblk -P -o NAME,TYPE,SIZE,MODEL,TRAN)
 
-    # Prepare display strings
+    # Prepare formatted disk options for gum
     DISK_OPTIONS=()
     for dev in "${DEVICES[@]}"; do
-        DISK_OPTIONS+=("${dev} | ${DEV_SIZE[$dev]} | ${DEV_MODEL[$dev]} | ${DEV_TRAN[$dev]}")
+        size="${DEV_SIZE[$dev]}"
+        model="${DEV_MODEL[$dev]}"
+        [[ ${#model} -gt 15 ]] && model="${model:0:12}..."  # truncate long model
+        tran="${DEV_TRAN[$dev]}"
+        DISK_OPTIONS+=("$(printf '%-10s | %-6s | %-15s | %-5s' "$dev" "$size" "$model" "$tran")")
     done
 
-    # Interactive selection
     CHOICE=$(gum choose "${DISK_OPTIONS[@]}" --height 6 --cursor "→" --header "Select disk:")
     TARGET_DISK=$(echo "$CHOICE" | awk '{print $1}')
-
     echo "Selected: $TARGET_DISK"
 }
 
