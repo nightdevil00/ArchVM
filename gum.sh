@@ -71,8 +71,8 @@ select_disk() {
             "${DEV_MODEL[${DEVICES[i]}]}" "${DEV_TRAN[${DEVICES[i]}]}"
     done
 
-    # Use gum choose
-    index=$(gum choose "${!DEVICES[@]}" --height 6 --cursor "→" --indicator "●" --header "Select disk number:")
+    # Interactive disk selection with gum
+    index=$(gum choose "${!DEVICES[@]}" --height 6 --cursor "→" --header "Select disk number:")
     TARGET_DISK="${DEVICES[$index]}"
     echo "Selected: $TARGET_DISK"
 }
@@ -244,7 +244,6 @@ zram-size = min(ram / 2, 4096)
 compression-algorithm = zstd
 ZRAM
 
-# Plymouth: spinner or other themes
 plymouth-set-default-theme -R spinner
 
 mkdir -p /boot/EFI/limine
@@ -273,7 +272,7 @@ systemctl enable NetworkManager iwd bluetooth avahi-daemon firewalld acpid
 EOF
 
   chmod +x /mnt/setup.sh
-  arch-chroot /mnt /setup.sh || { echo "❌ Chroot setup failed"; exit 1; }
+  arch-chroot /mnt /setup.sh || { gum style "❌ Chroot setup failed" --foreground red; exit 1; }
   rm /mnt/setup.sh
 }
 
@@ -293,4 +292,3 @@ main() {
 }
 
 main
-
