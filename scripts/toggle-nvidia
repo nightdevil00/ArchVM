@@ -3,14 +3,41 @@
 GPU="0000:01:00.0"
 AUDIO="0000:01:00.1"
 
-if [ "$(cat /sys/bus/pci/devices/$GPU/power/runtime_status)" = "suspended" ]; then
-    sudo modprobe nvidia nvidia_modeset nvidia_uvm 2>/dev/null
-    echo "on" | sudo tee /sys/bus/pci/devices/$GPU/power/control
-    echo "on" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control
-    echo "NVIDIA GPU enabled"
+# Check if the GPU is physically present on the PCI bus
+if [ ! -d "/sys/bus/pci/devices/$GPU" ]; then
+    echo "NVIDIA GPU is currently powered OFF (D3cold). Enabling..."
+    
+    # 1. Rescan the PCI bus to bring the hardware back
+    echo 1 | sudo tee /sys/bus/pci/rescan > /dev/null
+    
+    # 2. Wait a moment for the device to initialize
+    sleep 1
+    
+    if [ -d "/sys/bus/pci/devices/$GPU" ]; then
+        # 3. Force power to 'on' so the driver can initialize
+        echo "on" | sudo tee /sys/bus/pci/devices/$GPU/power/control > /dev/null
+        echo "on" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control > /dev/null
+        
+        # 4. Load the drivers
+        sudo modprobe nvidia nvidia_modeset nvidia_uvm 2>/dev/null
+        echo "NVIDIA GPU enabled and powered ON."
+    else
+        echo "Error: Failed to re-enable NVIDIA GPU via PCI rescan."
+    fi
 else
+    # GPU is present, so we want to disable it and cut power
+    echo "NVIDIA GPU is currently present. Disabling and cutting power (D3cold)..."
+    
+    # 1. Unload drivers (crucial to do first)
     sudo modprobe -r nvidia_uvm nvidia_modeset nvidia_drm nvidia 2>/dev/null
-    echo "auto" | sudo tee /sys/bus/pci/devices/$GPU/power/control
-    echo "auto" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control
-    echo "NVIDIA GPU disabled"
+    
+    # 2. Set power control to 'auto' to allow the kernel to manage its sleep state
+    echo "auto" | sudo tee /sys/bus/pci/devices/$GPU/power/control > /dev/null
+    echo "auto" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control > /dev/null
+    
+    # 3. Physically remove the device from the PCI bus to trigger the ACPI _OFF state
+    echo 1 | sudo tee /sys/bus/pci/devices/$GPU/remove > /dev/null
+    echo 1 | sudo tee /sys/bus/pci/devices/$AUDIO/remove > /dev/null
+    
+    echo "NVIDIA GPU disabled and removed from PCI bus (True Power Off)."
 fi
