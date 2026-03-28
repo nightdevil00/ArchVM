@@ -2,42 +2,83 @@
 
 GPU="0000:01:00.0"
 AUDIO="0000:01:00.1"
+CONFIG="/boot/limine.conf"
+BLACKLIST_PARAMS="modprobe.blacklist=nvidia modprobe.blacklist=nvidia_uvm modprobe.blacklist=nvidia_modeset modprobe.blacklist=nvidia_drm"
+
+# Function to remove blacklist from limine.conf
+enable_drivers() {
+    echo "Removing blacklist from $CONFIG..."
+    # Match the cmdline for the main Omarchy entry (range until next top-level entry /EFI)
+    sudo sed -i "/^\/+Omarchy/,/^\/E/ s/cmdline: .*/& /" "$CONFIG"
+    for param in $BLACKLIST_PARAMS; do
+        sudo sed -i "/^\/+Omarchy/,/^\/E/ s/$param//" "$CONFIG"
+    done
+    # Cleanup double spaces
+    sudo sed -i "/^\/+Omarchy/,/^\/E/ s/  */ /g" "$CONFIG"
+    sudo sed -i "/^\/+Omarchy/,/^\/E/ s/ *$//" "$CONFIG"
+}
+
+# Function to add blacklist to limine.conf
+disable_drivers() {
+    echo "Adding blacklist to $CONFIG..."
+    # Find the line number of the FIRST cmdline after /+Omarchy
+    LINE_NUM=$(grep -n -A 20 "^\/+Omarchy" "$CONFIG" | grep "cmdline:" | head -n 1 | awk -F'[-:]' '{print $1}')
+    
+    if [ ! -z "$LINE_NUM" ]; then
+        # Check if it already has the blacklist
+        if ! sed -n "${LINE_NUM}p" "$CONFIG" | grep -q "modprobe.blacklist=nvidia"; then
+            sudo sed -i "${LINE_NUM}s/cmdline: .*/& $BLACKLIST_PARAMS/" "$CONFIG"
+        fi
+    fi
+}
+
+run_updates() {
+    echo "Updating bootloader and initramfs..."
+    echo "y" | sudo limine-update
+    sudo mkinitcpio -P
+}
 
 # Check if the GPU is physically present on the PCI bus
 if [ ! -d "/sys/bus/pci/devices/$GPU" ]; then
     echo "NVIDIA GPU is currently powered OFF (D3cold). Enabling..."
     
-    # 1. Rescan the PCI bus to bring the hardware back
-    echo 1 | sudo tee /sys/bus/pci/rescan > /dev/null
+    # 1. Run updates first (in case they regenerate config)
+    run_updates
     
-    # 2. Wait a moment for the device to initialize
+    # 2. Update config after regeneration
+    enable_drivers
+    
+    # 3. Rescan the PCI bus
+    echo 1 | sudo tee /sys/bus/pci/rescan > /dev/null
     sleep 1
     
     if [ -d "/sys/bus/pci/devices/$GPU" ]; then
-        # 3. Force power to 'on' so the driver can initialize
         echo "on" | sudo tee /sys/bus/pci/devices/$GPU/power/control > /dev/null
         echo "on" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control > /dev/null
         
         # 4. Load the drivers
-        sudo modprobe nvidia nvidia_modeset nvidia_uvm 2>/dev/null
-        echo "NVIDIA GPU enabled and powered ON."
+        sudo modprobe nvidia nvidia_modeset nvidia_uvm nvidia_drm 2>/dev/null
+        echo "NVIDIA GPU enabled, unblacklisted, and powered ON."
     else
         echo "Error: Failed to re-enable NVIDIA GPU via PCI rescan."
     fi
 else
-    # GPU is present, so we want to disable it and cut power
-    echo "NVIDIA GPU is currently present. Disabling and cutting power (D3cold)..."
+    echo "NVIDIA GPU is currently present. Disabling and blacklisting (D3cold)..."
     
-    # 1. Unload drivers (crucial to do first)
+    # 1. Unload drivers
     sudo modprobe -r nvidia_uvm nvidia_modeset nvidia_drm nvidia 2>/dev/null
     
-    # 2. Set power control to 'auto' to allow the kernel to manage its sleep state
+    # 2. Run updates first
+    run_updates
+    
+    # 3. Update config after regeneration
+    disable_drivers
+    
+    # 4. Set power control to 'auto' and remove
     echo "auto" | sudo tee /sys/bus/pci/devices/$GPU/power/control > /dev/null
     echo "auto" | sudo tee /sys/bus/pci/devices/$AUDIO/power/control > /dev/null
-    
-    # 3. Physically remove the device from the PCI bus to trigger the ACPI _OFF state
     echo 1 | sudo tee /sys/bus/pci/devices/$GPU/remove > /dev/null
     echo 1 | sudo tee /sys/bus/pci/devices/$AUDIO/remove > /dev/null
     
-    echo "NVIDIA GPU disabled and removed from PCI bus (True Power Off)."
+    echo "NVIDIA GPU blacklisted, disabled, and removed (True Power Off)."
 fi
