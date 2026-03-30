@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+echo "Switching from NetworkManager to iwd + systemd-resolved..."
+
+echo "Stopping and disabling NetworkManager..."
+sudo systemctl disable --now NetworkManager.service
+
+echo "Enabling and starting iwd..."
+sudo systemctl enable --now iwd.service
+
+echo "Enabling and starting systemd-resolved..."
+sudo systemctl enable --now systemd-resolved.service
+
+echo "Creating iwd DNS config..."
+mkdir -p ~/.config/iwd
+cat > ~/.config/iwd/main.conf << 'EOF'
+[Network]
+EnableNetworkConfiguration=true
+NameResolvingService=systemd
+EOF
+
+echo "Done! Use 'iwctl' to connect to wifi."
+echo "Example: iwctl station wlan0 connect YourNetworkName"
