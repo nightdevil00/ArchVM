@@ -1,0 +1,210 @@
+#!/bin/bash
+
+# Installs and configures SUPER+C/V/X universal copy-paste using Hyprland's sendshortcut
+# Works across all Wayland and XWayland applications
+
+set -e
+
+OMARCHY_PATH="${OMARCHY_PATH:-/home/mihai/omarchy}"
+BINDINGS_FILE="${HOME}/.config/hypr/bindings/clipboard.conf"
+HYPRLAND_CONF="${HOME}/.config/hypr/hyprland.conf"
+
+echo "=== Super Copy-Paste Installer ==="
+echo
+
+install_packages() {
+  echo "Checking required packages..."
+
+  if ! pacman -Q wl-clipboard &>/dev/null; then
+    echo "  Installing wl-clipboard..."
+    sudo pacman -S --noconfirm wl-clipboard
+  else
+    echo "  wl-clipboard already installed"
+  fi
+
+  if ! pacman -Q hyprland &>/dev/null; then
+    echo "  Installing hyprland..."
+    sudo pacman -S --noconfirm hyprland
+  else
+    echo "  hyprland already installed"
+  fi
+
+  echo "  All packages satisfied"
+  echo
+}
+
+create_bindings_file() {
+  echo "Creating clipboard bindings file..."
+
+  mkdir -p "$(dirname "$BINDINGS_FILE")"
+
+  cat > "$BINDINGS_FILE" << 'EOF'
+# Universal Copy/Paste bindings using Hyprland sendshortcut
+# SUPER+C/V/X sends traditional Insert-based shortcuts that work in ALL apps
+
+bindd = SUPER, C, Universal copy, sendshortcut, CTRL, Insert,
+bindd = SUPER, V, Universal paste, sendshortcut, SHIFT, Insert,
+bindd = SUPER, X, Universal cut, sendshortcut, CTRL, X,
+EOF
+
+  echo "  Created: $BINDINGS_FILE"
+  echo
+}
+
+add_to_hyprland_conf() {
+  echo "Updating Hyprland configuration..."
+
+  if [[ -f "$HYPRLAND_CONF" ]]; then
+    if grep -q "bindings/clipboard.conf" "$HYPRLAND_CONF" 2>/dev/null; then
+      echo "  Clipboard bindings already sourced in hyprland.conf"
+    else
+      echo "  Adding source line to hyprland.conf..."
+      echo 'source = ~/.config/hypr/bindings/clipboard.conf' >> "$HYPRLAND_CONF"
+    fi
+  else
+    echo "  Creating new hyprland.conf with clipboard source..."
+    mkdir -p "$(dirname "$HYPRLAND_CONF")"
+    cat > "$HYPRLAND_CONF" << 'EOF'
+# Hyprland Configuration
+# Learn more: https://wiki.hyprland.org/Configuring/
+
+source = ~/.config/hypr/bindings/clipboard.conf
+EOF
+  fi
+  echo
+}
+
+configure_kitty() {
+  echo "Configuring kitty terminal clipboard..."
+
+  KITTY_CONF="${HOME}/.config/kitty/kitty.conf"
+  KITTY_CLIPBOARD="# --- Super Copy-Paste Clipboard Mappings ---
+# Map ctrl+insert and shift+insert for SUPER+C/V compatibility
+
+map ctrl+insert         copy_to_clipboard
+map shift+insert        paste_from_clipboard
+map ctrl+shift+insert   paste_from_clipboard
+
+# Linux terminal clipboard integration
+clipboard_control write-only copy-on-select write-output-on-change"
+
+  mkdir -p "$(dirname "$KITTY_CONF")"
+
+  if [[ -f "$KITTY_CONF" ]]; then
+    if grep -q "ctrl+insert.*copy_to_clipboard" "$KITTY_CONF" 2>/dev/null; then
+      echo "  Kitty clipboard already configured"
+    else
+      echo "  Adding clipboard mappings to kitty.conf..."
+      echo -e "\n$KITTY_CLIPBOARD" >> "$KITTY_CONF"
+    fi
+  else
+    echo "  Creating kitty.conf with clipboard mappings..."
+    cat > "$KITTY_CONF" << 'EOF'
+# Kitty Terminal Configuration
+# Map ctrl+insert and shift+insert for SUPER+C/V compatibility
+
+map ctrl+insert         copy_to_clipboard
+map shift+insert        paste_from_clipboard
+map ctrl+shift+insert   paste_from_clipboard
+
+# Linux terminal clipboard integration
+clipboard_control write-only copy-on-select write-output-on-change
+EOF
+  fi
+  echo
+}
+
+configure_tmux() {
+  echo "Configuring tmux clipboard..."
+
+  TMUX_CONF="${HOME}/.config/tmux/tmux.conf"
+  TMUX_CLIPBOARD="# --- Super Copy-Paste Clipboard Mappings ---
+# Enable tmux clipboard integration
+
+set -g set-clipboard on
+
+# Bind ctrl+insert and shift+insert for SUPER+C/V compatibility
+bind-key -n C-Insert run-shell 'tmux save-buffer - | wl-copy'
+bind-key -n S-Insert run-shell 'wl-paste | tmux load-buffer - ; tmux paste-buffer'
+
+# Alternative: copy mode bindings
+bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel 'wl-copy'
+bind-key -T copy-mode-vi D send-keys -X copy-pipe-and-cancel 'wl-copy'
+bind-key -T copy-mode Enter send-keys -X copy-pipe-and-cancel 'wl-copy'"
+
+  mkdir -p "$(dirname "$TMUX_CONF")"
+
+  if [[ -f "$TMUX_CONF" ]]; then
+    if grep -q "set-clipboard on" "$TMUX_CONF" 2>/dev/null; then
+      echo "  Tmux clipboard already configured"
+    else
+      echo "  Adding clipboard settings to tmux.conf..."
+      echo -e "\n$TMUX_CLIPBOARD" >> "$TMUX_CONF"
+    fi
+  else
+    echo "  Creating tmux.conf with clipboard settings..."
+    cat > "$TMUX_CONF" << 'EOF'
+# Tmux Configuration
+# Enable clipboard integration
+
+set -g set-clipboard on
+
+# Bind ctrl+insert and shift+insert for SUPER+C/V compatibility
+bind-key -n C-Insert run-shell 'tmux save-buffer - | wl-copy'
+bind-key -n S-Insert run-shell 'wl-paste | tmux load-buffer - ; tmux paste-buffer'
+
+# Alternative: copy mode bindings
+bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel 'wl-copy'
+bind-key -T copy-mode-vi D send-keys -X copy-pipe-and-cancel 'wl-copy'
+bind-key -T copy-mode Enter send-keys -X copy-pipe-and-cancel 'wl-copy'
+EOF
+  fi
+  echo
+}
+
+reload_hyprland() {
+  echo "Reloading Hyprland..."
+
+  if command -v hyprctl &>/dev/null; then
+    hyprctl reload
+    echo "  Hyprland reloaded successfully"
+  else
+    echo "  Warning: hyprctl not found. Please restart Hyprland manually."
+  fi
+  echo
+}
+
+show_summary() {
+  echo "=== Installation Complete ==="
+  echo
+  echo "Keybindings:"
+  echo "  SUPER + C    → Copy (sends CTRL+Insert)"
+  echo "  SUPER + V    → Paste (sends SHIFT+Insert)"
+  echo "  SUPER + X    → Cut (sends CTRL+X)"
+  echo
+  echo "These shortcuts work in:"
+  echo "  - Native Wayland apps"
+  echo "  - XWayland apps"
+  echo "  - Kitty terminal (ctrl+insert, shift+insert)"
+  echo "  - Tmux terminal (clipboard integration enabled)"
+  echo
+  echo "Config files:"
+  echo "  $BINDINGS_FILE"
+  echo "  ~/.config/kitty/kitty.conf"
+  echo "  ~/.config/tmux/tmux.conf"
+  echo
+  echo "Note: Restart kitty/tmux or source their configs to apply changes."
+  echo
+}
+
+main() {
+  install_packages
+  create_bindings_file
+  add_to_hyprland_conf
+  configure_kitty
+  configure_tmux
+  reload_hyprland
+  show_summary
+}
+
+main "$@"

@@ -10,6 +10,7 @@ mkdir -p "$TMP_MOUNT"
 
 declare -a DEVICES=()
 declare -A DEV_MODEL DEV_SIZE DEV_TRAN
+declare PROTECTED_PARTS=()
 
 while IFS= read -r line; do
     eval "$line"
@@ -79,8 +80,10 @@ if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
     read -rp "Root partition end (e.g. 60GB or 100%): " ROOT_END
     
     parted --script "$TARGET_DISK" mkpart primary fat32 "$EFI_START" "$EFI_END"
-    parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on
+    EFI_PART_NUM=$(parted -s "$TARGET_DISK" print | awk 'END{print $1}')
+    parted --script "$TARGET_DISK" set "$EFI_PART_NUM" boot on
     parted --script "$TARGET_DISK" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
+    ROOT_PART_NUM=$(parted -s "$TARGET_DISK" print | awk 'END{print $1}')
 else
     read -rp "Wipe disk and use entirely for Arch? (yes/no): " yn
     if [[ "$yn" != "yes" ]]; then
@@ -92,17 +95,24 @@ else
     parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
     parted --script "$TARGET_DISK" set 1 boot on
     parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
+    EFI_PART_NUM=1
+    ROOT_PART_NUM=2
 fi
 
 partprobe "$TARGET_DISK" || true
-sleep 1
+sleep 2
 
-parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-efi_partition="${parts[-2]}"
-root_partition="${parts[-1]}"
+# Robust partition path detection
+if [[ "$TARGET_DISK" == *nvme* || "$TARGET_DISK" == *mmcblk* ]]; then
+    efi_partition="${TARGET_DISK}p${EFI_PART_NUM}"
+    root_partition="${TARGET_DISK}p${ROOT_PART_NUM}"
+else
+    efi_partition="${TARGET_DISK}${EFI_PART_NUM}"
+    root_partition="${TARGET_DISK}${ROOT_PART_NUM}"
+fi
 
-echo "EFI: $efi_partition"
-echo "Root: $root_partition"
+echo "EFI: $efi_partition (Number: $EFI_PART_NUM)"
+echo "Root: $root_partition (Number: $ROOT_PART_NUM)"
 
 read -rp "Username: " USERNAME
 read -srp "User password: " USER_PASS; echo
@@ -120,7 +130,7 @@ echo -n "$LUKS_PASS" | cryptsetup luksFormat --type luks2 "$root_partition" -
 echo -n "$LUKS_PASS" | cryptsetup open "$root_partition" root -
 
 echo "Creating BTRFS..."
-mkfs.btrfs /dev/mapper/root
+mkfs.btrfs -L ARCH_ROOT /dev/mapper/root
 mount /dev/mapper/root /mnt
 
 for sub in @ @home @var_log @var_cache @snapshots; do
@@ -139,7 +149,7 @@ mount --mkdir "$efi_partition" /mnt/boot
 echo "Installing base system..."
 pacman -Sy --noconfirm archlinux-keyring
 pacstrap -K /mnt base base-devel linux linux-firmware btrfs-progs efibootmgr \
-    limine cryptsetup networkmanager reflector sudo vim intel-ucode \
+    limine cryptsetup networkmanager reflector sudo vim intel-ucode amd-ucode \
     dhcpcd iwd firewalld bluez bluez-utils acpid avahi rsync bash-completion \
     pipewire pipewire-alsa pipewire-pulse wireplumber sof-firmware
 
@@ -171,9 +181,9 @@ mkinitcpio -P
 mkdir -p /boot/EFI/limine
 cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
 
-efibootmgr --create --disk $TARGET_DISK --part 1 \
+efibootmgr --create --disk $TARGET_DISK --part $EFI_PART_NUM \
     --label "Arch Linux Limine" \
-    --loader '\\EFI\\limine\\BOOTX64.EFI' \
+    --loader '\\\\EFI\\\\limine\\\\BOOTX64.EFI' \
     --unicode
 
 cat <<LIMINE > /boot/EFI/limine/limine.conf
