@@ -1,0 +1,98 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+install_packages() {
+    if [[ ! -f "$SCRIPT_DIR/packages.txt" ]]; then
+        echo "packages.txt not found, skipping package installation"
+        return
+    fi
+
+    echo "Installing packages from packages.txt..."
+
+    if command -v yay &>/dev/null; then
+        AUR_HELPER="yay"
+    elif command -v paru &>/dev/null; then
+        AUR_HELPER="paru"
+    else
+        echo "No AUR helper found. Install yay or paru first."
+        AUR_HELPER=""
+    fi
+
+    while IFS= read -r package; do
+        [[ -z "$package" || "$package" =~ ^# ]] && continue
+        echo "Installing: $package"
+        if [[ "$package" == *"-bin"* || "$package" == *"-git"* || "$package" == *"-AUR"* ]] && [[ -n "$AUR_HELPER" ]]; then
+            "$AUR_HELPER" -S --noconfirm "$package" 2>/dev/null || echo "Failed to install $package"
+        else
+            sudo pacman -S --noconfirm "$package" 2>/dev/null || echo "Failed to install $package"
+        fi
+    done < "$SCRIPT_DIR/packages.txt"
+}
+
+run_scripts() {
+    echo "Running setup scripts..."
+
+    [[ -x "$SCRIPT_DIR/fix-nautilus-mime.sh" ]] && bash "$SCRIPT_DIR/fix-nautilus-mime.sh"
+    [[ -x "$SCRIPT_DIR/fix-udisks2.sh" ]] && bash "$SCRIPT_DIR/fix-udisks2.sh"
+    [[ -x "$SCRIPT_DIR/Nautilus_custom_scripts.sh" ]] && bash "$SCRIPT_DIR/Nautilus_custom_scripts.sh"
+    [[ -x "$SCRIPT_DIR/setup_matugen_automation.sh" ]] && bash "$SCRIPT_DIR/setup_matugen_automation.sh"
+    [[ -x "$SCRIPT_DIR/omarchy-install-chromium-google-account" ]] && bash "$SCRIPT_DIR/setup_matugen_automation.sh"
+    
+    
+}
+
+copy_configs() {
+    echo "Copying configuration files..."
+
+    mkdir -p "$HOME/.config"
+    [[ -d "$SCRIPT_DIR/hypr" ]] && cp -r "$SCRIPT_DIR/hypr"/* "$HOME/.config/"
+
+    mkdir -p "$HOME/Pictures"
+    [[ -d "$SCRIPT_DIR/wallpapers" ]] && cp -r "$SCRIPT_DIR/wallpapers"/* "$HOME/Pictures/"
+}
+
+run_hyprland_setup() {
+    [[ -x "$SCRIPT_DIR/hyprland_setup-copy-paste" ]] && bash "$SCRIPT_DIR/hyprland_setup-copy-paste"
+}
+
+cleanup_confirmation() {
+    local confirmations=0
+    local max_confirmations=3
+
+    while [[ $confirmations -lt $max_confirmations ]]; do
+        read -p "Are you sure you want to run cleanup? (This will remove installed packages) [yes/no]: " answer
+        if [[ "$answer" == "yes" ]]; then
+            ((confirmations++))
+            echo "Confirmation $confirmations of $max_confirmations"
+        elif [[ "$answer" == "no" ]]; then
+            echo "Cleanup cancelled"
+            return 1
+        else
+            echo "Please answer 'yes' or 'no'"
+        fi
+    done
+
+    if [[ $confirmations -eq $max_confirmations ]]; then
+        echo "Running cleanup..."
+        bash "$SCRIPT_DIR/cleanup-packages.sh"
+    fi
+}
+
+main() {
+    if [[ -f "$HOME/.config/arch_setup_done" ]]; then
+        echo "This script has been run before."
+        cleanup_confirmation
+    else
+        install_packages
+        run_scripts
+        copy_configs
+        run_hyprland_setup
+        touch "$HOME/.config/arch_setup_done"
+        echo "Setup complete!"
+    fi
+}
+
+main "$@"

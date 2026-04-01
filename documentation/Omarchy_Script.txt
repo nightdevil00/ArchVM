@@ -1,0 +1,114 @@
+omarchy-battery-monitor: Monitors battery level and sends critical notifications when low.
+omarchy-cmd-apple-display-brightness: Adjusts the brightness of an Apple display.
+omarchy-cmd-audio-switch: Switches between available audio output devices and displays a notification.
+omarchy-cmd-close-all-windows: Closes all open windows and moves to the first workspace.
+omarchy-cmd-first-run: Executes first-run setup scripts for battery monitor, firewall, GNOME theme, and Wi-Fi.
+omarchy-cmd-missing: Checks if a given command is missing from the system.
+omarchy-cmd-present: Checks if a given command is present on the system.
+omarchy-cmd-screenrecord: Records screen activity, either a selected region or an entire display, with optional audio.
+omarchy-cmd-screensaver: Activates a text-based screensaver with random effects.
+omarchy-cmd-screenshot: Captures screenshots of a selected region, window, or display and saves them to a directory.
+omarchy-cmd-share: Shares clipboard content, selected files, or folders using LocalSend.
+omarchy-cmd-terminal-cwd: Retrieves the current working directory of the active terminal's shell process.
+omarchy-cmd-tzupdate: Updates system time and timezone, then restarts Waybar.
+omarchy-dev-add-migration: Creates a new migration file and opens it in a text editor.
+omarchy-drive-info: Displays size and model information for a specified drive.
+omarchy-drive-select: Allows selection of a drive from a list, displaying its information.
+omarchy-drive-set-password: Changes the full-disk encryption password for a selected LUKS-encrypted drive.
+omarchy-font-current: Displays the currently active font family used in Waybar.
+omarchy-font-list: Lists available fonts, excluding emoji and Omarchy-specific fonts.
+omarchy-font-set: Sets the system-wide font for various applications like Alacritty, Kitty, Ghostty, Waybar, and SwayOSD.
+omarchy-install-chromium-google-account: Configures Chromium flags to allow Google account login.
+omarchy-install-dev-env: Installs development environments for various languages/frameworks (e.g., Ruby, Node.js, PHP, Go, Python).
+omarchy-install-docker-dbs: Installs and runs selected Docker database containers (MySQL, PostgreSQL, Redis, MongoDB, MariaDB).
+omarchy-install-dropbox: Installs Dropbox client and its dependencies, then starts the Dropbox service.
+omarchy-install-steam: Installs Steam and its graphics card-specific dependencies.
+omarchy-install-tailscale: Installs Tailscale and its UI, then configures sudoers for the UI.
+omarchy-install-terminal: Installs a specified terminal emulator (Alacritty, Ghostty, or Kitty) and sets it as the default.
+omarchy-launch-about: Launches a terminal displaying system information using fastfetch.
+omarchy-launch-browser: Launches the default web browser, with an option for private/incognito mode.
+omarchy-launch-editor: Launches the default text editor with specified files.
+omarchy-launch-floating-terminal-with-presentation: Launches a floating terminal with a logo and a command, then waits for user input.
+omarchy-launch-or-focus: Launches an application if it's not running, or focuses on it if it is.
+omarchy-launch-or-focus-webapp: Launches a web application if not running, or focuses on it if it is.
+omarchy-launch-screensaver: Forces the launch of the screensaver on all monitors.
+omarchy-launch-webapp: Launches a web application using the default browser in app mode.
+omarchy-launch-wifi: Launches the Impala Wi-Fi network manager.
+omarchy-lock-screen: Locks the screen using hyprlock and ensures 1Password is locked.
+omarchy-menu: Displays a main menu with various sub-menus for system actions, settings, and installations.
+omarchy-menu-keybindings: Displays Hyprland keybindings in an interactive menu.
+omarchy-migrate: Runs pending migration scripts and tracks their status.
+omarchy-notification-dismiss: Dismisses a notification based on its summary.
+omarchy-pkg-add: Installs specified packages using pacman if they are not already installed.
+omarchy-pkg-aur-accessible: Checks if the Arch User Repository (AUR) is accessible.
+omarchy-pkg-aur-install: Installs packages from the AUR using yay, with an interactive selection menu.
+omarchy-pkg-drop: Removes specified packages using pacman.
+omarchy-pkg-ignored: Lists packages that are ignored during system updates.
+omarchy-pkg-install: Installs packages using pacman, with an interactive selection menu.
+omarchy-pkg-missing: Checks if any of the specified packages are missing.
+omarchy-pkg-present: Checks if all specified packages are present.
+omarchy-pkg-remove: Removes installed packages using yay, with an interactive selection menu.
+omarchy-powerprofiles-list: Lists available power profiles.
+omarchy-refresh-applications: Refreshes application icons and .desktop files.
+omarchy-refresh-config: Refreshes a specific configuration file by copying the default and backing up the old one.
+omarchy-refresh-fastfetch: Refreshes the fastfetch configuration.
+omarchy-refresh-hypridle: Refreshes Hypridle configuration and restarts the service.
+omarchy-refresh-hyprland: Refreshes various Hyprland configuration files.
+omarchy-refresh-hyprlock: Refreshes Hyprlock configuration.
+omarchy-refresh-hyprsunset: Refreshes Hyprsunset configuration and restarts the service.
+omarchy-refresh-pacman-mirrorlist: Copies the default Pacman mirrorlist.
+omarchy-refresh-plymouth: Refreshes Plymouth boot splash theme and regenerates initramfs.
+omarchy-refresh-swayosd: Refreshes SwayOSD configuration and restarts the service.
+omarchy-refresh-walker: Refreshes Walker configuration and restarts the service.
+omarchy-refresh-waybar: Refreshes Waybar configuration and restarts the service.
+omarchy-reset-sudo: Resets sudo lockout for the current user.
+omarchy-restart-app: Restarts a specified application.
+omarchy-restart-bluetooth: Unblocks and lists Bluetooth devices.
+omarchy-restart-hypridle: Restarts the hypridle service.
+omarchy-restart-hyprsunset: Restarts the hyprsunset service.
+omarchy-restart-pipewire: Restarts the PipeWire audio service.
+omarchy-restart-swayosd: Restarts the swayosd-server.
+omarchy-restart-walker: Restarts the walker service.
+omarchy-restart-waybar: Restarts the waybar service.
+omarchy-restart-wifi: Unblocks and lists Wi-Fi devices.
+omarchy-restart-xcompose: Restarts the fcitx5 service (related to XCompose).
+omarchy-setup-dns: Configures DNS settings, allowing selection of Cloudflare, DHCP, or custom servers.
+omarchy-setup-fido2: Sets up or removes FIDO2 device for authentication with sudo and polkit.
+omarchy-setup-fingerprint: Sets up or removes fingerprint authentication for sudo and polkit.
+omarchy-show-done: Displays a "Done!" message and waits for user input to close.
+omarchy-show-logo: Displays the Omarchy logo in the terminal.
+omarchy-snapshot: Creates or restores system snapshots using snapper.
+omarchy-state: Sets or clears a named state file in the Omarchy state directory.
+omarchy-theme-bg-next: Cycles through available background images for the current theme.
+omarchy-theme-current: Displays the name of the currently active theme.
+omarchy-theme-install: Installs a new theme from a Git repository.
+omarchy-theme-list: Lists available themes.
+omarchy-theme-next: Switches to the next available theme.
+omarchy-theme-remove: Removes an installed theme.
+omarchy-theme-set: Sets the active theme, updates symlinks, and applies theme-specific settings to various applications.
+omarchy-theme-set-browser: Sets the browser theme color for Chromium-based browsers.
+omarchy-theme-set-eza: Sets the eza theme based on the current Omarchy theme.
+omarchy-theme-set-gnome: Sets GNOME color scheme and icon theme based on the current Omarchy theme.
+omarchy-theme-set-terminal: Triggers a refresh for the active terminal emulator to apply new theme settings.
+omarchy-theme-set-vscode: Installs and sets the VS Code theme based on the current Omarchy theme.
+omarchy-theme-update: Updates all installed themes by pulling from their Git repositories.
+omarchy-toggle-idle: Toggles the hypridle service, enabling or disabling idle locking.
+omarchy-toggle-nightlight: Toggles the nightlight feature (hyprsunset) and adjusts screen temperature.
+omarchy-toggle-screensaver: Toggles the screensaver on or off.
+omarchy-toggle-waybar: Toggles the Waybar panel on or off.
+omarchy-tui-install: Creates a .desktop entry for a Text User Interface (TUI) application, allowing it to be launched via the app launcher.
+omarchy-tui-remove: Removes installed TUI application shortcuts.
+omarchy-update: Performs a full system update, including Git pull, package updates, and migrations.
+omarchy-update-available: Checks if an Omarchy update is available by comparing local and remote Git tags.
+omarchy-update-available-reset: Resets the Waybar icon indicating an available update.
+omarchy-update-branch: Switches the Omarchy Git repository to a specified branch (master or dev).
+omarchy-update-git: Pulls the latest changes from the Omarchy Git repository.
+omarchy-update-perform: Executes the core update process, including system package updates, migrations, and restarts.
+omarchy-update-restart: Handles system restarts or Hyprland relaunches based on update requirements.
+omarchy-update-system-pkgs: Updates system packages using pacman and AUR packages using yay, then removes orphaned packages.
+omarchy-upload-log: Uploads various system logs (install, boot, installed packages) to 0x0.st.
+omarchy-version: Displays the current Omarchy version (Git tag).
+omarchy-version-branch: Displays the current Git branch of the Omarchy repository.
+omarchy-webapp-handler-zoom: Handles Zoom meeting URLs, converting them to web app URLs for launching.
+omarchy-webapp-install: Creates a .desktop entry for a web application, allowing it to be launched via the app launcher.
+omarchy-webapp-remove: Removes installed web application shortcuts.
