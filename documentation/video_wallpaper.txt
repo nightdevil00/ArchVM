@@ -1,0 +1,8 @@
+1. Install mpvpaper using yay -S mpvpaper
+2. Save your video file mp4 in ~/Pictures/
+3. Comment this line "exec-once = uwsm-app -- swaybg -i ~/.config/omarchy/current/background -m fill" in /home/mihai/.local/share/omarchy/default/hypr/autostart.conf
+4.add the line in .config/hypr/autostart.conf exec-once = mpvpaper -o "loop=yes mute=yes" eDP-1 /home/$USER/Pictures/video_file.mp4
+*Change eDP-1 to your hyprctl monitors
+*Change $USER to your username eg. rick
+
+
