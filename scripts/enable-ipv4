@@ -1,0 +1,18 @@
+#!/bin/bash
+# Enable IPv4 via dhcpcd
+
+set -e
+
+if ! command -v dhcpcd &>/dev/null; then
+    echo "Error: dhcpcd not found"
+    exit 1
+fi
+
+echo "Enabling dhcpcd service..."
+systemctl enable dhcpcd --now
+
+echo "Waiting for DHCP lease..."
+sleep 5
+
+echo "IPv4 configuration:"
+ip addr show wlan0 | grep 'inet '
