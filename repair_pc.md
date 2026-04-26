@@ -71,7 +71,7 @@ After reinstalling the kernel, it is crucial to regenerate the initramfs to incl
 mkinitcpio -P
 ```
 
-## 5. Configure Limine
+## 5. Configure Limine - only if required
 
 After the installation is complete, you need to configure Limine.
 
@@ -81,7 +81,7 @@ First, run the Limine deploy command:
 limine-deploy
 ```
 
-Then, you need to create a `limine.cfg` file in your `/boot` directory. Here is a sample configuration:
+Then, you need to create a `limine.conf` file in your `/boot` directory. Here is a sample configuration:
 
 ```
 TIMEOUT=5
