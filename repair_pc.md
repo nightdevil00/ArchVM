@@ -58,7 +58,7 @@ This will change the root directory to `/mnt` and give you access to your system
 Now, you can reinstall the necessary packages using `pacman`:
 
 ```bash
-
+sudo pacman -S linux linux-headers nvidia-open-dkms 
 ```
 
 This will download and reinstall the latest Linux kernel, headers, and the Limine bootloader.
