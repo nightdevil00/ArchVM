@@ -62,83 +62,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Chroot and Perform Actions ---
-arch-chroot "$MOUNT_DIR" /bin/bash <<EOF
+# --- Install Grub Bootloader ---
+info "Installing Grub bootloader..."
+arch-chroot "$MOUNT_DIR" /bin/bash <<'GRUBEOF'
 set -e
+echo "Installing Grub packages..."
+pacman -S --noconfirm grub efibootmgr
+echo "Running grub-install..."
+grub-install --target=x86_64-efi --efi-directory=/boot/EFI --bootloader-id=GRUB
+echo "Generating Grub configuration..."
+grub-mkconfig -o /boot/grub/grub.cfg
+echo "Grub installation completed."
+GRUBEOF
 
-echo "Detecting EFI mount point..."
-ESP_PATH=""
+# --- Interactive Chroot ---
+info "Entering interactive arch-chroot. Type 'exit' to leave and unmount."
+arch-chroot "$MOUNT_DIR"
 
-# Detect most common EFI mount locations
-for path in /boot/EFI /boot /efi; do
-    if [ -d "\$path/EFI" ] || [ -d "\$path/EFI" ] || find "\$path" -maxdepth 1 -type d -iname "EFI" | grep -q .; then
-        ESP_PATH="\$path"
-        break
-    fi
-done
-
-# Fallback if nothing found
-if [ -z "\$ESP_PATH" ]; then
-    ESP_PATH="/boot"
-    echo "Warning: Could not auto-detect ESP path. Defaulting to /boot."
-else
-    echo "Detected ESP path: \$ESP_PATH"
-fi
-
-echo "Preconfiguring Limine ESP path..."
-mkdir -p /etc/default
-echo "ESP_PATH=\$ESP_PATH" > /etc/default/limine
-
-echo "Installing required base packages..."
-pacman -Sy --noconfirm git base-devel sudo limine
-
-# Determine which user to use for AUR builds
-if id -u mihai >/dev/null 2>&1; then
-    AUR_USER="mihai"
-else
-    echo "Creating temporary AUR build user..."
-    useradd -m -G wheel -s /bin/bash aurbuilder
-    echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-aur
-    chmod 440 /etc/sudoers.d/99-aur
-    AUR_USER="aurbuilder"
-fi
-
-# Remove conflicting yay variants quietly
-for pkg in yay yay-bin yay-debug yay-bin-debug; do
-    if pacman -Q "\$pkg" >/dev/null 2>&1; then
-        echo "Removing conflicting package: \$pkg"
-        pacman -Rns --noconfirm "\$pkg" || true
-    fi
-done
-
-echo "Installing yay-bin as \$AUR_USER..."
-runuser -u \$AUR_USER -- bash -c '
-    git clone https://aur.archlinux.org/yay-bin.git /tmp/yay-bin
-    cd /tmp/yay-bin
-    makepkg -si --noconfirm
-'
-
-echo "Installing limine-snapper-sync and limine-mkinitcpio-hook..."
-runuser -u \$AUR_USER -- bash -c '
-    yay -S --noconfirm limine-snapper-sync limine-mkinitcpio-hook
-'
-
-echo "Running limine-install on /dev/$DISK..."
-limine-install /dev/$DISK || true
-
-echo "All packages installed successfully inside chroot."
-
-# Clean up temporary AUR user if created
-if [ "\$AUR_USER" = "aurbuilder" ]; then
-    echo "Cleaning up temporary AUR user..."
-    userdel -r aurbuilder || true
-    rm -f /etc/sudoers.d/99-aur
-fi
-
-EOF
-
-
-
-
-info "All operations completed successfully."
 
