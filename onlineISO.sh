@@ -67,8 +67,8 @@ niri
 xdg-desktop-portal-gnome
 
 # NVIDIA Drivers
-nvidia
-nvidia-utils
+nvidia-dkms
+linux-headers
 nvidia-settings
 egl-wayland
 
