@@ -381,16 +381,6 @@ general {
     layout = dwindle
 }
 
-animations {
-    enabled = true
-    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
-    animation = windows, 1, 7, myBezier
-    animation = windowsOut, 1, 7, default, popin 80%
-    animation = border, 1, 10, default
-    animation = borderangle, 1, 8, default
-    animation = fade, 1, 7, default
-    animation = workspaces, 1, 6, default
-}
 
 dwindle {
     pseudotile = true
@@ -452,77 +442,8 @@ EOF
 # Niri Configuration
 # ==============================================================================
 
-info "Creating Niri configuration..."
-cat > "$AIROOTFS/etc/skel/.config/niri/config.kdl" <<'EOF'
-// Niri Configuration for Live ISO
+#using default niri config, add your own
 
-input {
-    keyboard {
-        xkb {
-            layout "us"
-        }
-    }
-    
-    touchpad {
-        natural-scroll true
-    }
-}
-
-output "eDP-1" {
-    mode "1920x1080@60"
-}
-
-layout {
-    gaps 8
-    center-focused-column "never"
-}
-
-prefer-no-csd
-
-environment {
-    LIBVA_DRIVER_NAME "nvidia"
-    GBM_BACKEND "nvidia-drm"
-    __GLX_VENDOR_LIBRARY_NAME "nvidia"
-    WLR_NO_HARDWARE_CURSORS "1"
-}
-
-binds {
-    Mod+Space { spawn "fuzzel"; }
-    Mod+Return { spawn "alacritty"; }
-    Mod+F { spawn "nautilus"; }
-    
-    Ctrl+Escape { quit; }
-    Mod+Q { close-window; }
-    Mod+Shift+E { quit; }
-    
-    Mod+Left { focus-column-left; }
-    Mod+Right { focus-column-right; }
-    Mod+Up { focus-window-up; }
-    Mod+Down { focus-window-down; }
-    
-    Mod+Shift+Left { move-column-left; }
-    Mod+Shift+Right { move-column-right; }
-    Mod+Shift+Up { move-window-up; }
-    Mod+Shift+Down { move-window-down; }
-    
-    Mod+1 { focus-workspace 1; }
-    Mod+2 { focus-workspace 2; }
-    Mod+3 { focus-workspace 3; }
-    Mod+4 { focus-workspace 4; }
-    Mod+5 { focus-workspace 5; }
-    
-    Mod+Shift+1 { move-column-to-workspace 1; }
-    Mod+Shift+2 { move-column-to-workspace 2; }
-    Mod+Shift+3 { move-column-to-workspace 3; }
-    Mod+Shift+4 { move-column-to-workspace 4; }
-    Mod+Shift+5 { move-column-to-workspace 5; }
-}
-
-spawn-at-startup "nm-applet" "--indicator"
-spawn-at-startup "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
-spawn-at-startup "gsettings" "set" "org.gnome.desktop.interface" "gtk-theme" "Breeze-Dark"
-spawn-at-startup "gsettings" "set" "org.gnome.desktop.interface" "color-scheme" "prefer-dark"
-EOF
 
 # ==============================================================================
 # Alacritty Configuration
