@@ -58,7 +58,7 @@ This will change the root directory to `/mnt` and give you access to your system
 Now, you can reinstall the necessary packages using `pacman`:
 
 ```bash
-
+pacman -S linux linux-headers nvidia-dkms hyprland limine
 ```
 
 This will download and reinstall the latest Linux kernel, headers, and the Limine bootloader.
@@ -71,33 +71,61 @@ After reinstalling the kernel, it is crucial to regenerate the initramfs to incl
 mkinitcpio -P
 ```
 
-## 5. Configure Limine
+## 5. Deploy and Configure Limine
 
-After the installation is complete, you need to configure Limine.
+**Note:** Limine only supports FAT filesystems. This means your kernel (`vmlinuz-linux`) and initramfs (`initramfs-linux.img`) must reside on your EFI System Partition (ESP) which is mounted at `/boot`.
 
-First, run the Limine deploy command:
+### Deploy Limine to the ESP
+
+First, copy the Limine EFI executable to your ESP and create a UEFI boot entry:
 
 ```bash
-limine-deploy
+mkdir -p /boot/EFI/arch-limine
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/arch-limine/
 ```
 
-Then, you need to create a `limine.cfg` file in your `/boot` directory. Here is a sample configuration:
+Then create a UEFI boot entry using `efibootmgr`:
+
+```bash
+efibootmgr \
+  --create \
+  --disk /dev/sdX \
+  --part Y \
+  --label "Arch Linux Limine Boot Loader" \
+  --loader '\EFI\arch-limine\BOOTX64.EFI' \
+  --unicode
+```
+
+**Note:**
+* Replace `/dev/sdX` with your disk (e.g., `/dev/sda`, `/dev/nvme0n1`)
+* Replace `Y` with the partition number of your ESP (e.g., `1` if ESP is `/dev/sda1`)
+
+**Tip:** If `efibootmgr` doesn't work on your motherboard, copy to the fallback path instead and skip the `efibootmgr` step:
+```bash
+mkdir -p /boot/EFI/BOOT
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
+```
+
+### Create Limine Configuration
+
+Create the `limine.conf` file in the same directory as the Limine EFI executable (`/boot/EFI/arch-limine/limine.conf`):
 
 ```
-TIMEOUT=5
-DEFAULT_ENTRY=arch
+timeout: 5
 
-:arch
-PROTOCOL=linux
-KERNEL_PATH=boot/vmlinuz-linux
-CMDLINE=cryptdevice=UUID=<UUID_of_LUKS_partition>:root root=/dev/mapper/root rw
-INITRD_PATH=boot/initramfs-linux.img
+/Arch Linux
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: cryptdevice=UUID=<UUID_of_LUKS_partition>:root root=/dev/mapper/root rw rootflags=subvol=@
+    module_path: boot():/initramfs-linux.img
 ```
 
 **Important:**
 
-*   Replace `<UUID_of_LUKS_partition>` with the actual UUID of your LUKS2 partition. You can find the UUID with the command `lsblk -f`.
-*   Make sure the `KERNEL_PATH` and `INITRD_PATH` are correct.
+* Replace `<UUID_of_LUKS_partition>` with the actual UUID of your LUKS2 partition. Find it with `lsblk -f` or `blkid`.
+* `boot():/` refers to the partition where `limine.conf` resides (your ESP).
+* Add `rootflags=subvol=@` to specify your root BTRFS subvolume.
+* Make sure `/boot` contains `vmlinuz-linux` and `initramfs-linux.img` (Limine cannot read BTRFS).
 
 ## 6. Exit and Reboot
 
